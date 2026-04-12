@@ -7,7 +7,9 @@ Track your Indian stocks, gold, silver, and mutual funds — with a Streamlit da
 ## What It Does
 
 ### Daily WhatsApp (via Twilio sandbox — free)
+
 A short morning message with only what matters:
+
 - Nifty 50, gold, silver prices
 - Alerts if your stocks are overbought/oversold or had a big move
 - Top market gainer/loser
@@ -16,14 +18,18 @@ A short morning message with only what matters:
 - SIP reminders on due dates
 
 ### Weekly Email (via Gmail SMTP — free)
+
 A compact recap with:
+
 - Market/gold/silver weekly change
 - Alerts for your holdings (big moves, trend changes)
 - Top movers and strong buy signals
 - 3 news headlines
 
 ### Streamlit Dashboard (run locally or deploy free)
+
 Full deep-dive analysis:
+
 - **Overview**: Nifty, Sensex, gold/silver charts
 - **Gold & Silver**: Price trends, buy predictions (7-factor engine), self-learning from past predictions
 - **Portfolio**: All holdings with value, type breakdown, diversification score
@@ -75,14 +81,14 @@ TCS,TCS.NS,10000,stock,0,0,
 HDFC Bank,HDFCBANK.NS,6882,stock,0,0,
 ```
 
-| Column        | Description                                             |
-| ------------- | ------------------------------------------------------- |
-| `name`        | Display name                                            |
-| `ticker`      | Yahoo Finance ticker (`.NS` for NSE, `.BO` for BSE)    |
-| `amount`      | Amount invested (₹)                                     |
-| `type`        | `stock`, `mutual_fund`, or `debt`                       |
-| `sip_monthly` | Monthly SIP amount (₹), 0 if none                      |
-| `sip_date`    | Day of month for SIP reminder, 0 if none                |
+| Column        | Description                                                        |
+| ------------- | ------------------------------------------------------------------ |
+| `name`        | Display name                                                       |
+| `ticker`      | Yahoo Finance ticker (`.NS` for NSE, `.BO` for BSE)                |
+| `amount`      | Amount invested (₹)                                                |
+| `type`        | `stock`, `mutual_fund`, or `debt`                                  |
+| `sip_monthly` | Monthly SIP amount (₹), 0 if none                                  |
+| `sip_date`    | Day of month for SIP reminder, 0 if none                           |
 | `amfi_code`   | AMFI scheme code for MF NAV (from amfiindia.com), blank for stocks |
 
 ---
@@ -94,14 +100,14 @@ HDFC Bank,HDFCBANK.NS,6882,stock,0,0,
 1. Push your code to GitHub
 2. Add secrets: **Settings → Secrets → Actions**
 
-   | Secret           | Value                          |
-   | ---------------- | ------------------------------ |
-   | `TWILIO_SID`     | Twilio Account SID             |
-   | `TWILIO_AUTH`    | Twilio Auth Token              |
-   | `TO_NUMBER`      | `whatsapp:+91XXXXXXXXXX`       |
-   | `EMAIL_FROM`     | Gmail address                  |
-   | `EMAIL_PASSWORD` | Gmail App Password (16 chars)  |
-   | `EMAIL_TO`       | Recipient email                |
+   | Secret           | Value                         |
+   | ---------------- | ----------------------------- |
+   | `TWILIO_SID`     | Twilio Account SID            |
+   | `TWILIO_AUTH`    | Twilio Auth Token             |
+   | `TO_NUMBER`      | `whatsapp:+91XXXXXXXXXX`      |
+   | `EMAIL_FROM`     | Gmail address                 |
+   | `EMAIL_PASSWORD` | Gmail App Password (16 chars) |
+   | `EMAIL_TO`       | Recipient email               |
 
 3. Go to **Actions** tab → Enable workflows
 4. Schedule: Daily bot at 7:00 AM IST, weekly email on Sundays 9:30 AM IST
@@ -159,16 +165,16 @@ HDFC Bank,HDFCBANK.NS,6882,stock,0,0,
 
 ## Data Sources (all free)
 
-| Data                  | Source                         |
-| --------------------- | ------------------------------ |
-| Stock prices, indices | Yahoo Finance (yfinance)       |
-| Gold & Silver         | Yahoo Finance (GC=F, SI=F)     |
-| USD/INR exchange      | Yahoo Finance (USDINR=X)       |
-| Mutual Fund NAVs      | AMFI India API                 |
-| News headlines        | Google News RSS                |
-| WhatsApp delivery     | Twilio (free sandbox)          |
-| Email delivery        | Gmail SMTP (free)              |
-| Automation            | GitHub Actions (free tier)     |
+| Data                  | Source                           |
+| --------------------- | -------------------------------- |
+| Stock prices, indices | Yahoo Finance (yfinance)         |
+| Gold & Silver         | Yahoo Finance (GC=F, SI=F)       |
+| USD/INR exchange      | Yahoo Finance (USDINR=X)         |
+| Mutual Fund NAVs      | AMFI India API                   |
+| News headlines        | Google News RSS                  |
+| WhatsApp delivery     | Twilio (free sandbox)            |
+| Email delivery        | Gmail SMTP (free)                |
+| Automation            | GitHub Actions (free tier)       |
 | Dashboard hosting     | Streamlit Community Cloud (free) |
 
 ---
