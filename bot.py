@@ -295,10 +295,11 @@ def generate_message():
 
 
 def send_whatsapp(msg):
-    """Send message via Twilio WhatsApp sandbox."""
+    """Send message via Twilio WhatsApp sandbox to one or more numbers."""
     sid = os.getenv("TWILIO_SID")
     auth = os.getenv("TWILIO_AUTH")
     to_number = os.getenv("TO_NUMBER")
+    to_number_2 = os.getenv("TO_NUMBER_2")
 
     if not all([sid, auth, to_number]):
         print("⚠️  Missing Twilio credentials. Set TWILIO_SID, TWILIO_AUTH, TO_NUMBER.")
@@ -310,14 +311,19 @@ def send_whatsapp(msg):
     if len(msg) > 1550:
         msg = msg[:1500] + "\n\n... (truncated — see dashboard for full details)"
 
+    recipients = [to_number]
+    if to_number_2:
+        recipients.append(to_number_2)
+
     try:
         client = Client(sid, auth)
-        client.messages.create(
-            from_="whatsapp:+14155238886",
-            body=msg,
-            to=to_number,
-        )
-        print("✅ WhatsApp message sent!")
+        for number in recipients:
+            client.messages.create(
+                from_="whatsapp:+14155238886",
+                body=msg,
+                to=number,
+            )
+            print(f"✅ WhatsApp message sent to {number}!")
     except Exception as e:
         print(f"❌ Twilio error: {e}")
         print("\n--- Message Preview ---")
