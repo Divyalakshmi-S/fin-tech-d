@@ -1,0 +1,298 @@
+[
+  {
+    "name": "Nippon India Small Cap Fund Direct Growth",
+    "ticker": "0P0001BAO8.BO",
+    "type": "mutual_fund",
+    "investment_mode": "sip",
+    "buy_price": 0,
+    "quantity": 0,
+    "buy_date": "2024-06-04",
+    "sip_monthly": 1000,
+    "sip_date": 5,
+    "amfi_code": "118778"
+  },
+  {
+    "name": "TATA MOTORS DVR  A  ORD",
+    "ticker": "IN9155A01020",
+    "type": "stock",
+    "investment_mode": "lumpsum",
+    "buy_price": 746.9749999999999,
+    "quantity": 4.0,
+    "buy_date": "2024-08-01",
+    "sip_monthly": 0,
+    "sip_date": 0,
+    "amfi_code": "",
+    "transactions": [
+      {
+        "buy_price": 783.4,
+        "quantity": 2.0,
+        "buy_date": "2024-08-01",
+        "note": ""
+      },
+      {
+        "buy_price": 710.55,
+        "quantity": 2.0,
+        "buy_date": "2024-08-05",
+        "note": ""
+      }
+    ]
+  },
+  {
+    "name": "MANAPPURAM FINANCE LTD",
+    "ticker": "INE522D01027",
+    "type": "stock",
+    "investment_mode": "lumpsum",
+    "buy_price": 167.1,
+    "quantity": 10.0,
+    "buy_date": "2024-06-04",
+    "sip_monthly": 0,
+    "sip_date": 0,
+    "amfi_code": "",
+    "transactions": [
+      {
+        "buy_price": 167.1,
+        "quantity": 10.0,
+        "buy_date": "2024-06-04",
+        "note": ""
+      }
+    ]
+  },
+  {
+    "name": "OIL AND NATURAL GAS CORP.",
+    "ticker": "INE213A01029",
+    "type": "stock",
+    "investment_mode": "lumpsum",
+    "buy_price": 266.0,
+    "quantity": 2.0,
+    "buy_date": "2024-06-04",
+    "sip_monthly": 0,
+    "sip_date": 0,
+    "amfi_code": "",
+    "transactions": [
+      {
+        "buy_price": 266.0,
+        "quantity": 2.0,
+        "buy_date": "2024-06-04",
+        "note": ""
+      }
+    ]
+  },
+  {
+    "name": "IDFC FIRST BANK LIMITED",
+    "ticker": "INE092T01019",
+    "type": "stock",
+    "investment_mode": "lumpsum",
+    "buy_price": 75.85,
+    "quantity": 10.0,
+    "buy_date": "2024-06-04",
+    "sip_monthly": 0,
+    "sip_date": 0,
+    "amfi_code": "",
+    "transactions": [
+      {
+        "buy_price": 75.85,
+        "quantity": 10.0,
+        "buy_date": "2024-06-04",
+        "note": ""
+      }
+    ]
+  },
+  {
+    "name": "TATA MOTORS PASS VEH LTD",
+    "ticker": "INE155A01022",
+    "type": "stock",
+    "investment_mode": "lumpsum",
+    "buy_price": 584.9547368421053,
+    "quantity": 19.0,
+    "buy_date": "2024-06-05",
+    "sip_monthly": 0,
+    "sip_date": 0,
+    "amfi_code": "",
+    "transactions": [
+      {
+        "buy_price": 634.97,
+        "quantity": 2.0,
+        "buy_date": "2024-06-05",
+        "note": ""
+      },
+      {
+        "buy_price": 623.47,
+        "quantity": 1.0,
+        "buy_date": "2024-06-05",
+        "note": ""
+      },
+      {
+        "buy_price": 770.52,
+        "quantity": 1.0,
+        "buy_date": "2024-08-01",
+        "note": ""
+      },
+      {
+        "buy_price": 698.87,
+        "quantity": 1.0,
+        "buy_date": "2024-08-05",
+        "note": ""
+      },
+      {
+        "buy_price": 672.08,
+        "quantity": 2.0,
+        "buy_date": "2024-09-11",
+        "note": ""
+      },
+      {
+        "buy_price": 575.24,
+        "quantity": 2.0,
+        "buy_date": "2024-10-31",
+        "note": ""
+      },
+      {
+        "buy_price": 525.67,
+        "quantity": 10.0,
+        "buy_date": "2025-01-02",
+        "note": ""
+      }
+    ]
+  },
+  {
+    "name": "TATA MOTORS LIMITED",
+    "ticker": "INE1TAE01010",
+    "type": "stock",
+    "investment_mode": "lumpsum",
+    "buy_price": 264.65210526315786,
+    "quantity": 19.0,
+    "buy_date": "2024-06-05",
+    "sip_monthly": 0,
+    "sip_date": 0,
+    "amfi_code": "",
+    "transactions": [
+      {
+        "buy_price": 287.28,
+        "quantity": 2.0,
+        "buy_date": "2024-06-05",
+        "note": ""
+      },
+      {
+        "buy_price": 282.07,
+        "quantity": 1.0,
+        "buy_date": "2024-06-05",
+        "note": ""
+      },
+      {
+        "buy_price": 348.61,
+        "quantity": 1.0,
+        "buy_date": "2024-08-01",
+        "note": ""
+      },
+      {
+        "buy_price": 316.19,
+        "quantity": 1.0,
+        "buy_date": "2024-08-05",
+        "note": ""
+      },
+      {
+        "buy_price": 304.07,
+        "quantity": 2.0,
+        "buy_date": "2024-09-11",
+        "note": ""
+      },
+      {
+        "buy_price": 260.26,
+        "quantity": 2.0,
+        "buy_date": "2024-10-31",
+        "note": ""
+      },
+      {
+        "buy_price": 237.83,
+        "quantity": 10.0,
+        "buy_date": "2025-01-02",
+        "note": ""
+      }
+    ]
+  },
+  {
+    "name": "CENTRAL DEPO SER (I) LTD",
+    "ticker": "INE736A01011",
+    "type": "stock",
+    "investment_mode": "lumpsum",
+    "buy_price": 2040.0,
+    "quantity": 1.0,
+    "buy_date": "2024-06-07",
+    "sip_monthly": 0,
+    "sip_date": 0,
+    "amfi_code": "",
+    "transactions": [
+      {
+        "buy_price": 2040.0,
+        "quantity": 1.0,
+        "buy_date": "2024-06-07",
+        "note": ""
+      }
+    ]
+  },
+  {
+    "name": "NIP IND ETF GOLD BEES",
+    "ticker": "INF204KB17I5",
+    "type": "mutual_fund",
+    "investment_mode": "lumpsum",
+    "buy_price": 59.895555555555546,
+    "quantity": 9.0,
+    "buy_date": "2024-07-29",
+    "sip_monthly": 0,
+    "sip_date": 0,
+    "amfi_code": "",
+    "transactions": [
+      {
+        "buy_price": 59.9,
+        "quantity": 5.0,
+        "buy_date": "2024-07-29",
+        "note": ""
+      },
+      {
+        "buy_price": 59.89,
+        "quantity": 4.0,
+        "buy_date": "2024-07-29",
+        "note": ""
+      }
+    ]
+  },
+  {
+    "name": "ITC LTD",
+    "ticker": "INE154A01025",
+    "type": "stock",
+    "investment_mode": "lumpsum",
+    "buy_price": 422.03,
+    "quantity": 4.0,
+    "buy_date": "2025-01-02",
+    "sip_monthly": 0,
+    "sip_date": 0,
+    "amfi_code": "",
+    "transactions": [
+      {
+        "buy_price": 422.03,
+        "quantity": 4.0,
+        "buy_date": "2025-01-02",
+        "note": ""
+      }
+    ]
+  },
+  {
+    "name": "NIPPONAMC - NETFSILVER",
+    "ticker": "INF204KC1402",
+    "type": "mutual_fund",
+    "investment_mode": "lumpsum",
+    "buy_price": 92.09,
+    "quantity": 10.0,
+    "buy_date": "2025-05-02",
+    "sip_monthly": 0,
+    "sip_date": 0,
+    "amfi_code": "",
+    "transactions": [
+      {
+        "buy_price": 92.09,
+        "quantity": 10.0,
+        "buy_date": "2025-05-02",
+        "note": ""
+      }
+    ]
+  }
+]

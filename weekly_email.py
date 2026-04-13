@@ -20,35 +20,15 @@ import yfinance as yf
 from analysis import (
     load_portfolio_extended,
     analyze_portfolio,
+    calculate_portfolio_pnl,
     fetch_news,
     scan_top_movers,
     scan_oversold_opportunities,
+    metal_price_inr_weekly,
+    load_goals,
+    calculate_goal_progress,
+    calculate_sip_for_goal,
 )
-
-
-def _metal_price_inr(ticker, premium=1.03):
-    """Get metal price in INR/gram with weekly change."""
-    try:
-        metal = yf.Ticker(ticker)
-        fx = yf.Ticker("USDINR=X")
-        m_hist = metal.history(period="2wk")
-        f_hist = fx.history(period="2wk")
-        if m_hist.empty or f_hist.empty:
-            return None, None
-
-        common = m_hist.index.intersection(f_hist.index)
-        m_c = m_hist.loc[common, "Close"]
-        f_c = f_hist.loc[common, "Close"]
-        inr_g = (m_c * f_c) / 31.1035 * premium
-
-        current = round(inr_g.iloc[-1], 2)
-        week_ago = (
-            round(inr_g.iloc[-6], 2) if len(inr_g) >= 6 else round(inr_g.iloc[0], 2)
-        )
-        change = round(((current - week_ago) / week_ago) * 100, 2)
-        return current, change
-    except Exception:
-        return None, None
 
 
 def build_weekly_html():
@@ -72,8 +52,8 @@ def build_weekly_html():
         pass
 
     # --- Metals ---
-    gold_g, gold_wk = _metal_price_inr("GC=F", 1.03)
-    silver_g, silver_wk = _metal_price_inr("SI=F", 1.05)
+    gold_g, gold_wk = metal_price_inr_weekly("GC=F")
+    silver_g, silver_wk = metal_price_inr_weekly("SI=F")
 
     # --- Portfolio ---
     holdings = load_portfolio_extended()
@@ -108,6 +88,12 @@ def build_weekly_html():
             return ""
         return "▲" if val >= 0 else "▼"
 
+    def _fmt(val, fmt=",.0f"):
+        """Safe format — returns 'N/A' if val is None."""
+        if val is None:
+            return "N/A"
+        return format(val, fmt)
+
     html = f"""
     <html><body style="font-family: -apple-system, Arial, sans-serif; max-width: 600px; margin: auto; padding: 16px;">
     <div style="background: #1a1a2e; color: white; padding: 16px 20px; border-radius: 10px 10px 0 0;">
@@ -120,18 +106,18 @@ def build_weekly_html():
     <table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
         <tr style="border-bottom:1px solid #eee;">
             <td style="padding:6px;"><b>Nifty 50</b></td>
-            <td style="padding:6px; text-align:right;">₹{nifty_price:,.0f}</td>
-            <td style="padding:6px; text-align:right; color:{_color(nifty_wk)};">{_arrow(nifty_wk)} {nifty_wk:+.1f}%</td>
+            <td style="padding:6px; text-align:right;">₹{_fmt(nifty_price)}</td>
+            <td style="padding:6px; text-align:right; color:{_color(nifty_wk)};">{_arrow(nifty_wk)} {f'{nifty_wk:+.1f}%' if nifty_wk is not None else 'N/A'}</td>
         </tr>
         <tr style="border-bottom:1px solid #eee;">
             <td style="padding:6px;"><b>Gold</b></td>
-            <td style="padding:6px; text-align:right;">₹{gold_g:,.0f}/g</td>
-            <td style="padding:6px; text-align:right; color:{_color(gold_wk)};">{_arrow(gold_wk)} {gold_wk:+.1f}%</td>
+            <td style="padding:6px; text-align:right;">₹{_fmt(gold_g)}/g</td>
+            <td style="padding:6px; text-align:right; color:{_color(gold_wk)};">{_arrow(gold_wk)} {f'{gold_wk:+.1f}%' if gold_wk is not None else 'N/A'}</td>
         </tr>
         <tr>
             <td style="padding:6px;"><b>Silver</b></td>
-            <td style="padding:6px; text-align:right;">₹{silver_g:,.0f}/g</td>
-            <td style="padding:6px; text-align:right; color:{_color(silver_wk)};">{_arrow(silver_wk)} {silver_wk:+.1f}%</td>
+            <td style="padding:6px; text-align:right;">₹{_fmt(silver_g)}/g</td>
+            <td style="padding:6px; text-align:right; color:{_color(silver_wk)};">{_arrow(silver_wk)} {f'{silver_wk:+.1f}%' if silver_wk is not None else 'N/A'}</td>
         </tr>
     </table>
     """
@@ -191,6 +177,82 @@ def build_weekly_html():
     else:
         html += '<p style="color:#666;">✅ Your holdings had a quiet week — nothing unusual.</p>'
 
+    # --- Portfolio P&L ---
+    try:
+        pnl_data = calculate_portfolio_pnl(holdings, results)
+        if pnl_data and pnl_data["total_invested"] > 0:
+            pnl_color = _color(pnl_data["total_pnl"])
+            pnl_arrow = _arrow(pnl_data["total_pnl"])
+            html += f"""
+            <h3>💰 Portfolio P&amp;L</h3>
+            <table style="width:100%; border-collapse:collapse; margin-bottom:16px;">
+                <tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:6px;"><b>Invested</b></td>
+                    <td style="padding:6px; text-align:right;">₹{pnl_data['total_invested']:,.0f}</td>
+                </tr>
+                <tr style="border-bottom:1px solid #eee;">
+                    <td style="padding:6px;"><b>Current Value</b></td>
+                    <td style="padding:6px; text-align:right;">₹{pnl_data['total_current']:,.0f}</td>
+                </tr>
+                <tr>
+                    <td style="padding:6px;"><b>Returns</b></td>
+                    <td style="padding:6px; text-align:right; color:{pnl_color};">
+                        {pnl_arrow} ₹{pnl_data['total_pnl']:+,.0f} ({pnl_data['total_pnl_pct']:+.1f}%)</td>
+                </tr>
+            </table>
+            """
+    except Exception:
+        pass
+
+    # --- Goal Progress ---
+    try:
+        saved_goals = load_goals()
+        if saved_goals and holdings:
+            total_invested = sum(h["amount"] for h in holdings)
+            monthly_sips = sum(
+                h["sip_monthly"] for h in holdings if h["sip_monthly"] > 0
+            )
+            goal_alerts = []
+            for goal in saved_goals:
+                g_name = goal.get("name", "Unnamed")
+                g_target = goal.get("target", 0)
+                g_years = goal.get("years", 10)
+                g_return = goal.get("expected_return", 12)
+                g_created = goal.get("created_date", "")
+                years_remaining = g_years
+                if g_created:
+                    try:
+                        from datetime import datetime as dt_
+
+                        created_dt = dt_.strptime(g_created, "%Y-%m-%d")
+                        elapsed = (dt_.now() - created_dt).days / 365.25
+                        years_remaining = max(1, round(g_years - elapsed, 1))
+                    except Exception:
+                        pass
+                progress = calculate_goal_progress(
+                    total_invested, g_target, years_remaining, monthly_sips, g_return
+                )
+                if progress:
+                    if progress["on_track"]:
+                        goal_alerts.append(
+                            f'<li>✅ <b>{g_name}</b> — on track ({progress["progress_pct"]:.0f}% done)</li>'
+                        )
+                    else:
+                        needed = calculate_sip_for_goal(
+                            progress["remaining"], years_remaining, g_return
+                        )
+                        extra = needed["monthly_sip"] - monthly_sips if needed else 0
+                        goal_alerts.append(
+                            f'<li>⚠️ <b>{g_name}</b> — shortfall ₹{progress["shortfall"]:,.0f}. '
+                            f"Increase SIP by ~₹{max(extra, 0):,.0f}/mo</li>"
+                        )
+            if goal_alerts:
+                html += "<h3>🎯 Goal Progress</h3><ul>"
+                html += "".join(goal_alerts)
+                html += "</ul>"
+    except Exception:
+        pass
+
     # --- Top Movers: just top 2 each ---
     if gainers or losers:
         html += "<h3>🚀 Biggest Moves</h3>"
@@ -232,7 +294,10 @@ def send_weekly_email():
     email_pass = os.getenv("EMAIL_PASSWORD")
     email_to = os.getenv("EMAIL_TO")
     smtp_server = os.getenv("EMAIL_SMTP", "smtp.gmail.com")
-    smtp_port = int(os.getenv("EMAIL_PORT", "587"))
+    try:
+        smtp_port = int(os.getenv("EMAIL_PORT", "587"))
+    except (ValueError, TypeError):
+        smtp_port = 587
 
     if not all([email_from, email_pass, email_to]):
         print("⚠️  Missing email credentials. Set EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO.")

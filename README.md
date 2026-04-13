@@ -6,7 +6,7 @@ Track your Indian stocks, gold, silver, and mutual funds — with a Streamlit da
 
 ## What It Does
 
-### Daily WhatsApp (via Twilio sandbox — free)
+### Daily WhatsApp (via Twilio — free $15 credit)
 
 A short morning message with only what matters:
 
@@ -51,9 +51,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Configure
-cp .env.example .env          # Fill in your Twilio/email credentials
-nano data/portfolio.csv        # Add your holdings
+cp .env.example .env          # Fill in your Telegram/email credentials
 ```
+
+Your portfolio is managed through the dashboard UI — go to **⚙️ Manage Portfolio** to add your stocks and mutual funds.
 
 ### Run Locally
 
@@ -61,7 +62,7 @@ nano data/portfolio.csv        # Add your holdings
 # Dashboard
 streamlit run dashboard.py
 
-# WhatsApp message (prints preview without Twilio credentials)
+# Telegram message (prints preview without Telegram credentials)
 python bot.py
 
 # Weekly email (saves HTML preview without email credentials)
@@ -70,26 +71,28 @@ python weekly_email.py
 
 ---
 
-## Portfolio CSV Format
+## Portfolio Management
 
-Edit `data/portfolio.csv`:
+Your portfolio is managed entirely through the dashboard UI:
 
-```csv
-name,ticker,amount,type,sip_monthly,sip_date,amfi_code
-Nippon Small Cap Fund,0P0001BAO8.BO,17999,mutual_fund,1000,5,118778
-TCS,TCS.NS,10000,stock,0,0,
-HDFC Bank,HDFCBANK.NS,6882,stock,0,0,
-```
+1. Run `streamlit run dashboard.py`
+2. Go to **⚙️ Manage Portfolio** in the sidebar
+3. Add stocks/mutual funds with:
+   - **Name** — auto-resolves ticker (NSE/BSE) or AMFI code
+   - **Buy Price** — price you paid per unit
+   - **Quantity** — number of shares/units
+   - **Buy Date** — when you bought
+   - **SIP** (optional) — monthly SIP amount and date
 
-| Column        | Description                                                        |
-| ------------- | ------------------------------------------------------------------ |
-| `name`        | Display name                                                       |
-| `ticker`      | Yahoo Finance ticker (`.NS` for NSE, `.BO` for BSE)                |
-| `amount`      | Amount invested (₹)                                                |
-| `type`        | `stock`, `mutual_fund`, or `debt`                                  |
-| `sip_monthly` | Monthly SIP amount (₹), 0 if none                                  |
-| `sip_date`    | Day of month for SIP reminder, 0 if none                           |
-| `amfi_code`   | AMFI scheme code for MF NAV (from amfiindia.com), blank for stocks |
+The app automatically calculates:
+
+- **Holding period** — days/years held
+- **P&L** — profit/loss vs current market price
+- **Tax status** — LTCG (>1 year, 10%) vs STCG (≤1 year, 15%)
+- **Days to LTCG** — countdown to long-term tax benefit
+- **XIRR** — annualized returns using actual buy dates
+
+Data is stored in `data/portfolio.json` (auto-created).
 
 ---
 
@@ -118,23 +121,18 @@ HDFC Bank,HDFCBANK.NS,6882,stock,0,0,
 2. Go to [share.streamlit.io](https://share.streamlit.io)
 3. Sign in with GitHub → **New app**
 4. Select your repo, branch `main`, file `dashboard.py`
-5. Add secrets in **Advanced settings**:
-   ```toml
-   # Not needed for dashboard — it reads portfolio.csv directly
-   # But if you use .env variables:
-   MONTHLY_INCOME = "109000"
-   MONTHLY_EXPENSES = "47800"
-   ```
-6. Click **Deploy** — your dashboard is live with a public URL
+5. Click **Deploy** — your dashboard is live with a public URL
 
-### Setting Up Twilio (WhatsApp — free sandbox)
+### Setting Up Twilio WhatsApp (free $15 credit — lasts ~8 years)
 
-1. Create account at [twilio.com](https://www.twilio.com)
+1. Create account at [twilio.com](https://www.twilio.com) — get **$15 free credit** (no card needed)
 2. Go to **Messaging → Try it out → Send a WhatsApp message**
-3. Send the join code from WhatsApp to the Twilio sandbox number
-4. Copy **Account SID** and **Auth Token** from the console
+3. Send the join code from your WhatsApp to the Twilio sandbox number
+4. Copy **Account SID** and **Auth Token** from the Twilio console
+5. Add `TWILIO_SID`, `TWILIO_AUTH`, `TO_NUMBER` to `.env` or GitHub Secrets
 
-> **Note:** Twilio sandbox expires after 72 hours of inactivity. Re-send the join code periodically.
+> **Cost**: ~$0.005/msg → $15 credit = ~3,000 messages = **~8 years** of daily alerts.
+> **Sandbox note**: If you don't send for 72h, re-send the join code. With daily GitHub Actions, this won't happen.
 
 ### Setting Up Gmail (weekly email — free)
 
@@ -156,7 +154,7 @@ HDFC Bank,HDFCBANK.NS,6882,stock,0,0,
 ├── .github/workflows/
 │   └── daily.yml      # GitHub Actions automation
 └── data/
-    ├── portfolio.csv            # Your holdings
+    ├── portfolio.json           # Your holdings (managed via UI)
     ├── gold_predictions.json    # Prediction history (auto-generated)
     └── silver_predictions.json  # Prediction history (auto-generated)
 ```

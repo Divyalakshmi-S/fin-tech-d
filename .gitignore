@@ -2,6 +2,6 @@
 __pycache__/
 *.pyc
 .vscode/
-data/*.xlsx
-data/*.json
+# data/*.xlsx
+# data/*.json
 data/weekly_preview.html
