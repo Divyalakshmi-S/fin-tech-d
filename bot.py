@@ -1,8 +1,18 @@
 import os
 import csv
+import json
+import urllib.request
+import urllib.parse
 from datetime import datetime
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not needed in GitHub Actions
+
 import yfinance as yf
-from twilio.rest import Client
 from analysis import (
     load_portfolio_extended,
     analyze_portfolio,
@@ -291,45 +301,58 @@ def generate_message():
     return "\n".join(part for part in parts if part)
 
 
-# --- WhatsApp via Twilio ---
+# --- Telegram Bot ---
 
 
-def send_whatsapp(msg):
-    """Send message via Twilio WhatsApp sandbox to one or more numbers."""
-    sid = os.getenv("TWILIO_SID")
-    auth = os.getenv("TWILIO_AUTH")
-    to_number = os.getenv("TO_NUMBER")
-    to_number_2 = os.getenv("TO_NUMBER_2")
+def send_telegram(msg):
+    """Send message via Telegram Bot API to one or more chat IDs."""
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    chat_id_2 = os.getenv("TELEGRAM_CHAT_ID_2")
 
-    if not all([sid, auth, to_number]):
-        print("⚠️  Missing Twilio credentials. Set TWILIO_SID, TWILIO_AUTH, TO_NUMBER.")
+    if not all([bot_token, chat_id]):
+        print(
+            "⚠️  Missing Telegram credentials. Set TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID."
+        )
         print("\n--- Message Preview ---")
         print(msg)
         return
 
-    # WhatsApp has a ~1600 char limit; truncate if needed
-    if len(msg) > 1550:
-        msg = msg[:1500] + "\n\n... (truncated — see dashboard for full details)"
+    # Telegram limit is 4096 chars; truncate if needed
+    if len(msg) > 4000:
+        msg = msg[:3950] + "\n\n... (truncated — see dashboard for full details)"
 
-    recipients = [to_number]
-    if to_number_2:
-        recipients.append(to_number_2)
+    recipients = [chat_id]
+    if chat_id_2:
+        recipients.append(chat_id_2)
 
-    try:
-        client = Client(sid, auth)
-        for number in recipients:
-            client.messages.create(
-                from_="whatsapp:+14155238886",
-                body=msg,
-                to=number,
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+    for cid in recipients:
+        try:
+            payload = json.dumps(
+                {
+                    "chat_id": cid,
+                    "text": msg,
+                    "disable_web_page_preview": True,
+                }
+            ).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
             )
-            print(f"✅ WhatsApp message sent to {number}!")
-    except Exception as e:
-        print(f"❌ Twilio error: {e}")
-        print("\n--- Message Preview ---")
-        print(msg)
+            with urllib.request.urlopen(req) as resp:
+                if resp.status == 200:
+                    print(f"✅ Telegram message sent to chat {cid}!")
+                else:
+                    print(f"❌ Telegram error: HTTP {resp.status}")
+        except Exception as e:
+            print(f"❌ Telegram error for chat {cid}: {e}")
+            print("\n--- Message Preview ---")
+            print(msg)
 
 
 if __name__ == "__main__":
     message = generate_message()
-    send_whatsapp(message)
+    send_telegram(message)
