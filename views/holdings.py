@@ -430,9 +430,28 @@ def render(holdings):
                         st.session_state[f"detail_loaded_{h['ticker']}"] = True
 
                     if st.session_state.get(f"detail_loaded_{h['ticker']}", False):
-                        # Chart
+                        # Chart with timeframe selector
                         try:
-                            chart_data = yf.Ticker(h["ticker"]).history(period="1y")
+                            period_options = {
+                                "1W": "5d",
+                                "1M": "1mo",
+                                "3M": "3mo",
+                                "6M": "6mo",
+                                "1Y": "1y",
+                                "5Y": "5y",
+                            }
+                            period_labels = list(period_options.keys())
+                            selected_period = st.radio(
+                                "Chart Period",
+                                period_labels,
+                                index=4,  # default 1Y
+                                horizontal=True,
+                                key=f"chart_period_{h['ticker']}",
+                            )
+                            yf_period = period_options[selected_period]
+                            chart_data = yf.Ticker(h["ticker"]).history(
+                                period=yf_period
+                            )
                             if not chart_data.empty:
                                 closes = chart_data["Close"]
                                 chart_df = pd.DataFrame({"Price": closes})

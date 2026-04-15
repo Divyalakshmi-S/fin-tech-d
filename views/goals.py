@@ -2,14 +2,13 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
+import db
+import auth
 from analysis import (
     calculate_sip_for_goal,
     calculate_goal_progress,
     recommend_sip_funds,
     analyze_existing_mf_holdings,
-    save_goal,
-    load_goals,
-    delete_goal,
 )
 
 
@@ -17,7 +16,9 @@ def render(holdings):
     st.title("🎯 Goal-Based Planning")
     st.caption("Plan your financial goals and track how much SIP you need")
 
-    goal_tab1, goal_tab2 = st.tabs(["🧮 SIP Calculator", "📊 Track My Goals"])
+    goal_tab1, goal_tab2, goal_tab3 = st.tabs(
+        ["🧮 SIP Calculator", "📊 Track My Goals", "📐 Goal Asset Allocation"]
+    )
 
     with goal_tab1:
         st.subheader("How much SIP do I need?")
@@ -122,9 +123,7 @@ def render(holdings):
                         else ""
                     )
 
-                    with st.expander(
-                        f"{vi} **{mf['name']}** — {verdict}{sip_tag}"
-                    ):
+                    with st.expander(f"{vi} **{mf['name']}** — {verdict}{sip_tag}"):
                         # Metrics row
                         m1, m2, m3, m4 = st.columns(4)
                         m1.metric("Invested", f"₹{mf['invested']:,.0f}")
@@ -251,14 +250,15 @@ def render(holdings):
                     )
                     if st.form_submit_button("💾 Save Goal"):
                         if goal_name.strip():
-                            save_goal(
+                            db.save_goal(
                                 {
                                     "name": goal_name.strip(),
                                     "target": target,
                                     "years": years,
                                     "expected_return": expected_return,
                                     "monthly_sip": goal_result["monthly_sip"],
-                                }
+                                },
+                                user_id=auth.get_user_id(),
                             )
                             st.success(
                                 f"✅ Goal **{goal_name.strip()}** saved! Track it in the **📊 Track My Goals** tab."
@@ -291,7 +291,7 @@ def render(holdings):
     with goal_tab2:
         st.subheader("📊 Track My Goals")
 
-        saved_goals = load_goals()
+        saved_goals = db.load_goals(user_id=auth.get_user_id())
 
         if not saved_goals:
             st.info(
@@ -441,9 +441,121 @@ def render(holdings):
                                             )
 
                     # Meta info + delete
+                    # F13: Inflation-adjusted goal info
+                    inflation_rate = 6.0  # default
+                    future_target = g_target * (
+                        (1 + inflation_rate / 100) ** years_remaining
+                    )
                     st.caption(
-                        f"Created: {g_created} · {g_years}yr horizon · {g_return}% expected return"
+                        f"Created: {g_created} · {g_years}yr horizon · {g_return}% expected return · "
+                        f"Inflation-adjusted target: ₹{future_target:,.0f} (at {inflation_rate}% inflation)"
                     )
                     if st.button(f"🗑️ Remove Goal", key=f"del_goal_{g_id}"):
-                        delete_goal(g_id)
+                        db.delete_goal(g_id, user_id=auth.get_user_id())
                         st.rerun()
+
+    # =====================================================================
+    # F12: Goal-based Asset Allocation
+    # =====================================================================
+    with goal_tab3:
+        st.subheader("📐 Goal-Based Asset Allocation")
+        st.caption(
+            "Different goals need different investment strategies based on time horizon"
+        )
+
+        saved_goals = db.load_goals(user_id=auth.get_user_id())
+
+        if not saved_goals:
+            st.info(
+                "Save some goals in the **SIP Calculator** tab first, then come back here for allocation advice."
+            )
+        else:
+            for goal in saved_goals:
+                g_name = goal.get("name", "Unnamed")
+                g_years = goal.get("years", 10)
+                g_target = goal.get("target", 0)
+                g_sip = goal.get("monthly_sip", 0)
+                g_created = goal.get("created_date", "")
+
+                # Calculate remaining years
+                years_left = g_years
+                if g_created:
+                    try:
+                        created_dt = datetime.strptime(g_created, "%Y-%m-%d")
+                        elapsed = (datetime.now() - created_dt).days / 365.25
+                        years_left = max(0.5, round(g_years - elapsed, 1))
+                    except Exception:
+                        pass
+
+                # Determine allocation based on time horizon
+                if years_left <= 2:
+                    alloc = {"Liquid/Ultra Short Debt": 80, "Short-term Debt Fund": 20}
+                    risk_label = "Conservative"
+                    advice = "Goal is very close. Move to safe debt instruments to protect capital."
+                elif years_left <= 5:
+                    alloc = {
+                        "Large Cap / Index Fund": 40,
+                        "Balanced/Hybrid Fund": 30,
+                        "Short-term Debt": 30,
+                    }
+                    risk_label = "Moderate"
+                    advice = "Medium-term goal. Mix equity and debt for growth with stability."
+                elif years_left <= 10:
+                    alloc = {
+                        "Large Cap / Index Fund": 40,
+                        "Mid Cap Fund": 25,
+                        "Balanced/Hybrid Fund": 20,
+                        "Debt Fund": 15,
+                    }
+                    risk_label = "Moderate-Aggressive"
+                    advice = "Good time horizon. Equity-heavy allocation for growth."
+                else:
+                    alloc = {
+                        "Large Cap / Index Fund": 30,
+                        "Mid Cap Fund": 25,
+                        "Small Cap Fund": 20,
+                        "International Fund": 15,
+                        "Debt Fund": 10,
+                    }
+                    risk_label = "Aggressive"
+                    advice = (
+                        "Long time horizon. Maximize equity for compounding growth."
+                    )
+
+                risk_color = {
+                    "Conservative": "#27ae60",
+                    "Moderate": "#3498db",
+                    "Moderate-Aggressive": "#f39c12",
+                    "Aggressive": "#e67e22",
+                }.get(risk_label, "#95a5a6")
+
+                with st.expander(
+                    f"🎯 **{g_name}** — {years_left:.0f} years left · {risk_label}"
+                ):
+                    st.markdown(
+                        f"""<div style="border-left: 4px solid {risk_color}; padding: 10px 14px; margin: 8px 0;
+                        border-radius: 4px; background: {risk_color}11;">
+                        <strong>{risk_label} Strategy</strong> — {advice}
+                        </div>""",
+                        unsafe_allow_html=True,
+                    )
+
+                    # Show allocation
+                    alloc_cols = st.columns(len(alloc))
+                    for col, (category, pct) in zip(alloc_cols, alloc.items()):
+                        sip_share = round(g_sip * pct / 100)
+                        col.markdown(
+                            f"""<div style="text-align:center; padding:8px; border-radius:8px;
+                            background: {risk_color}11; border: 1px solid {risk_color}33;">
+                            <div style="font-size:1.3em; font-weight:bold; color:{risk_color};">{pct}%</div>
+                            <div style="font-weight:bold; font-size:0.85em;">{category}</div>
+                            <div style="font-size:0.8em; opacity:0.7;">₹{sip_share:,.0f}/mo</div>
+                            </div>""",
+                            unsafe_allow_html=True,
+                        )
+
+                    # Glide path reminder
+                    if years_left > 5:
+                        st.caption(
+                            f"📅 **Glide path:** When {years_left - 3:.0f} years remain, start shifting 10% from equity to debt each year."
+                        )

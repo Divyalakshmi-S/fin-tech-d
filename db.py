@@ -1,0 +1,624 @@
+"""
+Supabase database abstraction layer.
+
+All data access goes through this module. If Supabase is not configured
+(missing env vars), falls back to local JSON files — so the bot and local
+dev still work without a DB.
+
+Swap to any PostgreSQL host by changing SUPABASE_URL / SUPABASE_KEY.
+"""
+
+import os
+import json
+from datetime import datetime
+
+# ---------------------------------------------------------------------------
+# Connection
+# ---------------------------------------------------------------------------
+
+_supabase_client = None
+_use_db = False
+
+
+def _get_client():
+    """Lazy-init Supabase client. Returns None if not configured."""
+    global _supabase_client, _use_db
+    if _supabase_client is not None:
+        return _supabase_client
+
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_KEY", "")
+
+    # Also check Streamlit secrets (for Streamlit Cloud)
+    if not url or not key:
+        try:
+            import streamlit as st
+
+            url = url or st.secrets.get("supabase", {}).get("SUPABASE_URL", "")
+            key = key or st.secrets.get("supabase", {}).get("SUPABASE_KEY", "")
+        except Exception:
+            pass
+
+    if not url or not key:
+        _use_db = False
+        return None
+
+    try:
+        from supabase import create_client
+
+        _supabase_client = create_client(url, key)
+        _use_db = True
+        return _supabase_client
+    except Exception:
+        _use_db = False
+        return None
+
+
+def is_db_available():
+    """Check if Supabase is configured and reachable."""
+    return _get_client() is not None
+
+
+def get_service_client():
+    """Get a Supabase client using the service-role key (bypasses RLS).
+    Used by the bot in GitHub Actions.
+    """
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if not url or not key:
+        return None
+    try:
+        from supabase import create_client
+
+        return create_client(url, key)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# JSON fallback helpers (existing behaviour)
+# ---------------------------------------------------------------------------
+
+
+def _json_path(filename):
+    return os.path.join(os.path.dirname(__file__), "data", filename)
+
+
+def _load_json(filename, default=None):
+    path = _json_path(filename)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return default if default is not None else []
+
+
+def _save_json(filename, data):
+    path = _json_path(filename)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, default=str)
+    os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------------------
+# Portfolio CRUD
+# ---------------------------------------------------------------------------
+
+
+def load_portfolio(user_id=None):
+    """Load portfolio rows for a user. Returns list[dict]."""
+    client = _get_client()
+    if client and user_id:
+        resp = client.table("portfolio").select("*").eq("user_id", user_id).execute()
+        rows = resp.data or []
+        # Convert DB rows to the same shape as JSON entries
+        for r in rows:
+            if isinstance(r.get("transactions"), str):
+                r["transactions"] = json.loads(r["transactions"])
+            if isinstance(r.get("sip_pause_periods"), str):
+                r["sip_pause_periods"] = json.loads(r["sip_pause_periods"])
+        return rows
+    return _load_json("portfolio.json", [])
+
+
+def save_portfolio(rows, user_id=None):
+    """Replace all portfolio rows for a user."""
+    client = _get_client()
+    if client and user_id:
+        # Delete existing rows for user, then insert new ones
+        client.table("portfolio").delete().eq("user_id", user_id).execute()
+        if rows:
+            for r in rows:
+                r["user_id"] = user_id
+                # Ensure JSONB fields are dicts/lists, not strings
+                if "transactions" in r and isinstance(r["transactions"], str):
+                    r["transactions"] = json.loads(r["transactions"])
+                if "sip_pause_periods" in r and isinstance(r["sip_pause_periods"], str):
+                    r["sip_pause_periods"] = json.loads(r["sip_pause_periods"])
+                # Remove fields not in DB schema
+                r.pop("id", None)
+                r.pop("created_at", None)
+            client.table("portfolio").insert(rows).execute()
+        return
+    _save_json("portfolio.json", rows)
+
+
+# ---------------------------------------------------------------------------
+# Budget CRUD
+# ---------------------------------------------------------------------------
+
+
+def load_budget(user_id=None):
+    """Load budget for a user. Returns dict."""
+    default = {"income": 0, "expenses": 0, "investments": 0}
+    client = _get_client()
+    if client and user_id:
+        resp = (
+            client.table("budget")
+            .select("income, expenses, investments")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if resp.data:
+            return resp.data[0]
+        return default
+    return _load_json("budget.json", default)
+
+
+def save_budget(data, user_id=None):
+    """Upsert budget for a user."""
+    client = _get_client()
+    if client and user_id:
+        row = {
+            "user_id": user_id,
+            "income": data["income"],
+            "expenses": data["expenses"],
+            "investments": data["investments"],
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        client.table("budget").upsert(row, on_conflict="user_id").execute()
+        return
+    _save_json("budget.json", data)
+
+
+# ---------------------------------------------------------------------------
+# Goals CRUD
+# ---------------------------------------------------------------------------
+
+
+def load_goals(user_id=None):
+    """Load goals for a user. Returns list[dict]."""
+    client = _get_client()
+    if client and user_id:
+        resp = client.table("goals").select("*").eq("user_id", user_id).execute()
+        return resp.data or []
+    return _load_json("goals.json", [])
+
+
+def save_goal(goal, user_id=None):
+    """Insert a single goal. Returns the new goal ID."""
+    client = _get_client()
+    if client and user_id:
+        row = {
+            "user_id": user_id,
+            "name": goal["name"],
+            "target": goal["target"],
+            "years": goal["years"],
+            "expected_return": goal["expected_return"],
+            "monthly_sip": goal["monthly_sip"],
+            "created_date": goal.get(
+                "created_date", datetime.now().strftime("%Y-%m-%d")
+            ),
+        }
+        resp = client.table("goals").insert(row).execute()
+        return resp.data[0]["id"] if resp.data else 0
+    # JSON fallback
+    goals = _load_json("goals.json", [])
+    goal["id"] = max((g.get("id", 0) for g in goals), default=0) + 1
+    if "created_date" not in goal:
+        goal["created_date"] = datetime.now().strftime("%Y-%m-%d")
+    goals.append(goal)
+    _save_json("goals.json", goals)
+    return goal["id"]
+
+
+def delete_goal(goal_id, user_id=None):
+    """Delete a goal by ID."""
+    client = _get_client()
+    if client and user_id:
+        client.table("goals").delete().eq("id", goal_id).eq(
+            "user_id", user_id
+        ).execute()
+        return
+    goals = _load_json("goals.json", [])
+    goals = [g for g in goals if g.get("id") != goal_id]
+    _save_json("goals.json", goals)
+
+
+# ---------------------------------------------------------------------------
+# Predictions (global — no user_id needed)
+# ---------------------------------------------------------------------------
+
+
+def load_predictions(table_name):
+    """Load predictions from DB or JSON. table_name is one of:
+    gold_predictions, silver_predictions, scanner_predictions
+    """
+    client = _get_client()
+    if client:
+        resp = client.table(table_name).select("*").order("date", desc=True).execute()
+        rows = resp.data or []
+        for r in rows:
+            if isinstance(r.get("factor_scores"), str):
+                r["factor_scores"] = json.loads(r["factor_scores"])
+            if isinstance(r.get("buy_reasoning"), str):
+                r["buy_reasoning"] = json.loads(r["buy_reasoning"])
+        return rows
+    return _load_json(f"{table_name}.json", [])
+
+
+def save_prediction(table_name, entry, unique_keys=None):
+    """Upsert a prediction row. unique_keys controls dedup (e.g. ['date'] or ['date','ticker'])."""
+    client = _get_client()
+    if client:
+        if unique_keys:
+            conflict_cols = ",".join(unique_keys)
+            client.table(table_name).upsert(entry, on_conflict=conflict_cols).execute()
+        else:
+            client.table(table_name).insert(entry).execute()
+        return entry
+
+    # JSON fallback: same dedup logic as before
+    filename = f"{table_name}.json"
+    predictions = _load_json(filename, [])
+    if unique_keys:
+        predictions = [
+            p
+            for p in predictions
+            if not all(p.get(k) == entry.get(k) for k in unique_keys)
+        ]
+    predictions.append(entry)
+    _save_json(filename, predictions)
+    return entry
+
+
+def update_predictions(table_name, predictions_list):
+    """Bulk-update predictions (for verify functions). Writes entire list."""
+    client = _get_client()
+    if client:
+        for p in predictions_list:
+            pid = p.get("id")
+            if pid:
+                update_data = {k: v for k, v in p.items() if k != "id"}
+                client.table(table_name).update(update_data).eq("id", pid).execute()
+        return
+    _save_json(f"{table_name}.json", predictions_list)
+
+
+# ---------------------------------------------------------------------------
+# Auth helpers (for Streamlit dashboard)
+# ---------------------------------------------------------------------------
+
+
+def sign_up(email, password):
+    """Register a new user. Returns (user, error)."""
+    client = _get_client()
+    if not client:
+        return None, "Database not configured"
+    try:
+        resp = client.auth.sign_up({"email": email, "password": password})
+        if resp.user:
+            return resp.user, None
+        return None, "Sign-up failed"
+    except Exception as e:
+        return None, str(e)
+
+
+def sign_in(email, password):
+    """Authenticate a user. Returns (session, error)."""
+    client = _get_client()
+    if not client:
+        return None, "Database not configured"
+    try:
+        resp = client.auth.sign_in_with_password({"email": email, "password": password})
+        if resp.session:
+            return resp.session, None
+        return None, "Invalid credentials"
+    except Exception as e:
+        return None, str(e)
+
+
+def sign_out():
+    """Sign out the current user."""
+    client = _get_client()
+    if client:
+        try:
+            client.auth.sign_out()
+        except Exception:
+            pass
+
+
+def get_user_from_session(access_token):
+    """Validate an access token and return user info."""
+    client = _get_client()
+    if not client:
+        return None
+    try:
+        resp = client.auth.get_user(access_token)
+        return resp.user if resp else None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Portfolio History (daily snapshots)
+# ---------------------------------------------------------------------------
+
+
+def save_portfolio_snapshot(snapshot, user_id=None):
+    """Upsert a daily portfolio snapshot."""
+    client = _get_client()
+    if client:
+        row = {**snapshot}
+        if user_id:
+            row["user_id"] = user_id
+        client.table("portfolio_history").upsert(
+            row, on_conflict="user_id,date" if user_id else "date"
+        ).execute()
+        return
+    # JSON fallback
+    history = _load_json("portfolio_history.json", [])
+    history = [h for h in history if h.get("date") != snapshot["date"]]
+    history.append(snapshot)
+    # Keep last 365 days
+    history = sorted(history, key=lambda x: x["date"])[-365:]
+    _save_json("portfolio_history.json", history)
+
+
+def load_portfolio_history(user_id=None, limit=365):
+    """Load portfolio history snapshots."""
+    client = _get_client()
+    if client:
+        query = (
+            client.table("portfolio_history")
+            .select("*")
+            .order("date", desc=False)
+            .limit(limit)
+        )
+        if user_id:
+            query = query.eq("user_id", user_id)
+        resp = query.execute()
+        return resp.data or []
+    return _load_json("portfolio_history.json", [])[-limit:]
+
+
+# ---------------------------------------------------------------------------
+# Dividend Tracking
+# ---------------------------------------------------------------------------
+
+
+def load_dividends(user_id=None):
+    """Load dividend records for a user."""
+    client = _get_client()
+    if client and user_id:
+        resp = (
+            client.table("dividends")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("date", desc=True)
+            .execute()
+        )
+        return resp.data or []
+    return _load_json("dividends.json", [])
+
+
+def save_dividend(dividend, user_id=None):
+    """Insert a dividend record."""
+    client = _get_client()
+    if client and user_id:
+        row = {**dividend, "user_id": user_id}
+        row.pop("id", None)
+        client.table("dividends").insert(row).execute()
+        return
+    divs = _load_json("dividends.json", [])
+    dividend["id"] = max((d.get("id", 0) for d in divs), default=0) + 1
+    divs.append(dividend)
+    _save_json("dividends.json", divs)
+
+
+def delete_dividend(div_id, user_id=None):
+    """Delete a dividend record."""
+    client = _get_client()
+    if client and user_id:
+        client.table("dividends").delete().eq("id", div_id).eq(
+            "user_id", user_id
+        ).execute()
+        return
+    divs = _load_json("dividends.json", [])
+    divs = [d for d in divs if d.get("id") != div_id]
+    _save_json("dividends.json", divs)
+
+
+# ---------------------------------------------------------------------------
+# Net Worth Tracking (F1)
+# ---------------------------------------------------------------------------
+
+
+def load_net_worth(user_id=None):
+    """Load net worth data for a user."""
+    client = _get_client()
+    if client and user_id:
+        resp = client.table("net_worth").select("*").eq("user_id", user_id).execute()
+        if resp.data:
+            return resp.data[0]
+        return None
+    return _load_json("net_worth.json", None)
+
+
+def save_net_worth(data, user_id=None):
+    """Upsert net worth data for a user."""
+    client = _get_client()
+    if client and user_id:
+        row = {**data, "user_id": user_id, "updated_at": datetime.utcnow().isoformat()}
+        client.table("net_worth").upsert(row, on_conflict="user_id").execute()
+        return
+    _save_json("net_worth.json", data)
+
+
+# ---------------------------------------------------------------------------
+# Tax Planning (F6)
+# ---------------------------------------------------------------------------
+
+
+def load_tax_planning(user_id=None):
+    """Load tax planning data for a user."""
+    client = _get_client()
+    if client and user_id:
+        resp = client.table("tax_planning").select("*").eq("user_id", user_id).execute()
+        if resp.data:
+            return resp.data[0]
+        return None
+    return _load_json("tax_planning.json", None)
+
+
+def save_tax_planning(data, user_id=None):
+    """Upsert tax planning data."""
+    client = _get_client()
+    if client and user_id:
+        row = {**data, "user_id": user_id, "updated_at": datetime.utcnow().isoformat()}
+        client.table("tax_planning").upsert(row, on_conflict="user_id").execute()
+        return
+    _save_json("tax_planning.json", data)
+
+
+# ---------------------------------------------------------------------------
+# Fixed Income Instruments — NPS/PPF/FD Tracker (F8)
+# ---------------------------------------------------------------------------
+
+
+def load_fixed_instruments(user_id=None):
+    """Load fixed-income instruments for a user."""
+    client = _get_client()
+    if client and user_id:
+        resp = (
+            client.table("fixed_instruments")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return resp.data or []
+    return _load_json("fixed_instruments.json", [])
+
+
+def save_fixed_instruments(instruments, user_id=None):
+    """Replace all fixed-income instruments for a user."""
+    client = _get_client()
+    if client and user_id:
+        client.table("fixed_instruments").delete().eq("user_id", user_id).execute()
+        if instruments:
+            rows = [{**i, "user_id": user_id} for i in instruments]
+            for r in rows:
+                r.pop("id", None)
+                r.pop("created_at", None)
+            client.table("fixed_instruments").insert(rows).execute()
+        return
+    _save_json("fixed_instruments.json", instruments)
+
+
+# ---------------------------------------------------------------------------
+# Family Profiles — multi-member portfolio management
+# ---------------------------------------------------------------------------
+
+
+def load_family_members(user_id=None):
+    """Load family member profiles for a user. Returns list[dict]."""
+    client = _get_client()
+    if client and user_id:
+        resp = (
+            client.table("family_members")
+            .select("*")
+            .eq("owner_id", user_id)
+            .order("created_at")
+            .execute()
+        )
+        return resp.data or []
+    return _load_json("family_members.json", [])
+
+
+def save_family_member(member, user_id=None):
+    """Insert a family member profile."""
+    client = _get_client()
+    if client and user_id:
+        row = {**member, "owner_id": user_id}
+        row.pop("id", None)
+        row.pop("created_at", None)
+        resp = client.table("family_members").insert(row).execute()
+        return resp.data[0]["id"] if resp.data else 0
+    # JSON fallback
+    members = _load_json("family_members.json", [])
+    member["id"] = max((m.get("id", 0) for m in members), default=0) + 1
+    members.append(member)
+    _save_json("family_members.json", members)
+    return member["id"]
+
+
+def delete_family_member(member_id, user_id=None):
+    """Delete a family member profile."""
+    client = _get_client()
+    if client and user_id:
+        client.table("family_members").delete().eq("id", member_id).eq(
+            "owner_id", user_id
+        ).execute()
+        return
+    members = _load_json("family_members.json", [])
+    members = [m for m in members if m.get("id") != member_id]
+    _save_json("family_members.json", members)
+
+
+def load_family_portfolio(member_id, user_id=None):
+    """Load portfolio for a specific family member."""
+    client = _get_client()
+    if client and user_id:
+        resp = (
+            client.table("family_portfolio")
+            .select("*")
+            .eq("member_id", member_id)
+            .execute()
+        )
+        rows = resp.data or []
+        for r in rows:
+            if isinstance(r.get("transactions"), str):
+                r["transactions"] = json.loads(r["transactions"])
+            if isinstance(r.get("sip_pause_periods"), str):
+                r["sip_pause_periods"] = json.loads(r["sip_pause_periods"])
+        return rows
+    # JSON fallback: filter by member_id
+    all_rows = _load_json("family_portfolio.json", [])
+    return [r for r in all_rows if r.get("member_id") == member_id]
+
+
+def save_family_portfolio(rows, member_id, user_id=None):
+    """Replace all portfolio rows for a family member."""
+    client = _get_client()
+    if client and user_id:
+        client.table("family_portfolio").delete().eq("member_id", member_id).execute()
+        if rows:
+            for r in rows:
+                r["member_id"] = member_id
+                if "transactions" in r and isinstance(r["transactions"], str):
+                    r["transactions"] = json.loads(r["transactions"])
+                if "sip_pause_periods" in r and isinstance(r["sip_pause_periods"], str):
+                    r["sip_pause_periods"] = json.loads(r["sip_pause_periods"])
+                r.pop("id", None)
+                r.pop("created_at", None)
+            client.table("family_portfolio").insert(rows).execute()
+        return
+    # JSON fallback
+    all_rows = _load_json("family_portfolio.json", [])
+    all_rows = [r for r in all_rows if r.get("member_id") != member_id]
+    for r in rows:
+        r["member_id"] = member_id
+    all_rows.extend(rows)
+    _save_json("family_portfolio.json", all_rows)

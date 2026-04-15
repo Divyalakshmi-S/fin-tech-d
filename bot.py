@@ -12,6 +12,12 @@ try:
 except ImportError:
     pass  # dotenv not needed in GitHub Actions
 
+# Set up Supabase service key for bot (bypasses RLS)
+# The bot uses SUPABASE_SERVICE_KEY instead of SUPABASE_KEY
+_svc_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+if _svc_key and not os.environ.get("SUPABASE_KEY"):
+    os.environ["SUPABASE_KEY"] = _svc_key
+
 import yfinance as yf
 from analysis import (
     load_portfolio_extended,
@@ -161,7 +167,7 @@ def generate_message():
         name = r["holding"]["name"]
         if a["rsi"] is not None and a["rsi"] <= 30:
             alerts.append(
-                f"🟢 {name} is oversold (RSI {a['rsi']:.0f}) — consider buying more"
+                f"🟢 {name} RSI is low ({a['rsi']:.0f}) — historically oversold territory"
             )
         if a["rsi"] is not None and a["rsi"] >= 70:
             alerts.append(
@@ -198,12 +204,19 @@ def generate_message():
                         "LEAN SELL": "🟠",
                         "SELL": "🔴",
                     }.get(sig, "⚪")
+                    outlook = {
+                        "BUY": "Bullish",
+                        "LEAN BUY": "Mildly Bullish",
+                        "WAIT": "Neutral",
+                        "LEAN SELL": "Mildly Bearish",
+                        "SELL": "Bearish",
+                    }.get(sig, "Neutral")
                     pred_lines.append(
-                        f"  {sig_icon} {h['name']}: {sig} ({pred['confidence']}%)"
+                        f"  {sig_icon} {h['name']}: {outlook} ({pred['confidence']}% factor agreement)"
                     )
             if pred_lines:
                 parts.append("")
-                parts.append("🔮 Stock Signals:")
+                parts.append("🔮 Technical Outlook:")
                 parts.extend(pred_lines)
     except Exception:
         pass
@@ -239,7 +252,7 @@ def generate_message():
         strong = [o for o in opps if o.get("urgency") == "high"]
         if strong:
             parts.append("")
-            parts.append("💡 Buy opportunity:")
+            parts.append("💡 Technically oversold stocks:")
             for o in strong[:2]:
                 parts.append(f"  {o['name']} ₹{o['price']:,.0f} — {o['buy_verdict']}")
     except Exception:
@@ -297,6 +310,11 @@ def generate_message():
                 parts.extend(off_track[:3])
     except Exception:
         pass
+
+    # Compliance disclaimer
+    parts.append("")
+    parts.append("─────────────────────")
+    parts.append("ℹ️ Educational analysis only — not investment advice.")
 
     return "\n".join(part for part in parts if part)
 

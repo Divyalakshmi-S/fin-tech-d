@@ -13,6 +13,7 @@ def render(holdings):
             "📊 Fundamentals",
             "🛡️ Risk Management",
             "📖 Varsity Roadmap",
+            "📗 Financial Glossary",
         ]
     )
 
@@ -181,3 +182,161 @@ All content is free — available on web and mobile app.
 - **[NSE India](https://www.nseindia.com)** — Official exchange data
 """
         )
+
+    with learn_tabs[4]:
+        st.subheader("📗 Financial Glossary")
+        st.caption("Quick reference for financial terms used across this dashboard")
+
+        glossary_search = st.text_input(
+            "🔍 Search glossary", placeholder="Type a term...", key="glossary_search"
+        )
+
+        glossary = [
+            (
+                "CAGR",
+                "Compound Annual Growth Rate — the average annual return of an investment over a period, smoothing out volatility.",
+            ),
+            (
+                "XIRR",
+                "Extended Internal Rate of Return — calculates annualized returns for irregular cash flows like SIPs or multiple investments.",
+            ),
+            (
+                "SIP",
+                "Systematic Investment Plan — investing a fixed amount regularly (monthly) into mutual funds. Averages out market volatility.",
+            ),
+            (
+                "NAV",
+                "Net Asset Value — the per-unit price of a mutual fund. Calculated daily as (Total Assets - Liabilities) ÷ Number of Units.",
+            ),
+            (
+                "RSI",
+                "Relative Strength Index — momentum indicator (0-100). Below 30 = oversold (cheap), above 70 = overbought (expensive).",
+            ),
+            (
+                "MACD",
+                "Moving Average Convergence Divergence — trend-following momentum indicator. Bullish when MACD crosses above signal line.",
+            ),
+            (
+                "PE Ratio",
+                "Price-to-Earnings Ratio — stock price divided by earnings per share. Lower PE = cheaper valuation (relative).",
+            ),
+            (
+                "EPS",
+                "Earnings Per Share — company's net profit divided by number of shares. Higher EPS = more profitable.",
+            ),
+            (
+                "LTCG",
+                "Long-Term Capital Gains — profits from selling assets held for more than 1 year (equity). Taxed at 10% above ₹1.25L.",
+            ),
+            (
+                "STCG",
+                "Short-Term Capital Gains — profits from selling equity held less than 1 year. Taxed at 15%.",
+            ),
+            (
+                "Alpha",
+                "Returns above the benchmark (e.g., Nifty 50). Positive alpha = you beat the market.",
+            ),
+            (
+                "Beta",
+                "Measure of volatility relative to the market. Beta > 1 = more volatile than market, < 1 = less volatile.",
+            ),
+            (
+                "Sharpe Ratio",
+                "Risk-adjusted return. (Return - Risk-free rate) ÷ Standard Deviation. Higher = better risk-adjusted performance.",
+            ),
+            (
+                "ELSS",
+                "Equity Linked Savings Scheme — tax-saving mutual fund with 3-year lock-in. Qualifies for Section 80C deduction.",
+            ),
+            (
+                "Section 80C",
+                "Income tax deduction up to ₹1,50,000/year for investments in PPF, ELSS, EPF, LIC, NSC, etc.",
+            ),
+            (
+                "Section 80D",
+                "Income tax deduction for health insurance premiums — ₹25,000 self + ₹50,000 parents (senior citizen).",
+            ),
+            (
+                "NPS",
+                "National Pension System — government retirement scheme. Extra ₹50,000 deduction under 80CCD(1B).",
+            ),
+            (
+                "PPF",
+                "Public Provident Fund — government savings scheme at 7.1% with 15-year lock-in. Tax-free returns.",
+            ),
+            (
+                "HRA",
+                "House Rent Allowance — salary component partially exempt from tax if you pay rent.",
+            ),
+            (
+                "ATR",
+                "Average True Range — measures average daily price movement volatility. Used to set stop-loss levels.",
+            ),
+            (
+                "Stop Loss",
+                "Pre-set price at which you sell to limit losses. Typically 2× ATR below entry price.",
+            ),
+            (
+                "Golden Cross",
+                "50-day moving average crosses above 200-day — bullish long-term signal.",
+            ),
+            (
+                "Death Cross",
+                "50-day moving average crosses below 200-day — bearish long-term signal.",
+            ),
+            (
+                "Bollinger Bands",
+                "Volatility bands at 2 standard deviations above/below 20-day SMA. Squeeze = big move coming.",
+            ),
+            (
+                "FIRE",
+                "Financial Independence, Retire Early — having 25× annual expenses invested (4% withdrawal rule).",
+            ),
+            (
+                "Asset Allocation",
+                "Spreading investments across asset classes (equity, debt, gold, real estate) to manage risk.",
+            ),
+            (
+                "Rebalancing",
+                "Periodically adjusting portfolio back to target allocation percentages.",
+            ),
+            (
+                "Diversification",
+                "Spreading investments across different stocks/sectors/assets to reduce risk.",
+            ),
+            (
+                "AUM",
+                "Assets Under Management — total market value of investments managed by a fund.",
+            ),
+            (
+                "Expense Ratio",
+                "Annual fee charged by mutual funds as % of AUM. Direct plans have lower expense ratios.",
+            ),
+            (
+                "NFO",
+                "New Fund Offer — initial offering of a new mutual fund scheme. Similar to IPO for stocks.",
+            ),
+        ]
+
+        # Filter by search
+        if glossary_search:
+            filtered = [
+                (t, d)
+                for t, d in glossary
+                if glossary_search.lower() in t.lower()
+                or glossary_search.lower() in d.lower()
+            ]
+        else:
+            filtered = glossary
+
+        if filtered:
+            for term, definition in filtered:
+                st.markdown(
+                    f"""<div style="border-left: 3px solid #3498db; padding: 8px 14px; margin: 6px 0;
+                    border-radius: 4px; background: #3498db08;">
+                    <strong>{term}</strong> — {definition}
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.info("No matching terms found. Try a different search.")

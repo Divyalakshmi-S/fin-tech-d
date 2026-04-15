@@ -7,39 +7,61 @@ from html import escape as html_escape
 
 # ---------------------------------------------------------------------------
 # Signal map — single source of truth for all prediction displays
+# Framed as educational analysis (not investment advice) for SEBI compliance
 # ---------------------------------------------------------------------------
 SIGNAL_MAP = {
     "BUY": (
         "🟢",
         "#27ae60",
-        "Good time to buy",
-        "Buy now — most indicators are positive",
+        "Indicators are bullish",
+        "Most technical factors favour upside — conditions look favourable",
     ),
     "LEAN BUY": (
         "🟢",
         "#2ecc71",
-        "Slightly favourable",
-        "Buy a small amount now, add more if price dips",
+        "Slightly bullish outlook",
+        "Some indicators lean positive — could improve further on a dip",
     ),
     "SELL": (
         "🔴",
         "#e74c3c",
-        "Don't buy right now",
-        "Looks overpriced — wait for a correction",
+        "Indicators are bearish",
+        "Looks stretched — technical signals suggest waiting for a correction",
     ),
     "LEAN SELL": (
         "🟠",
         "#f39c12",
-        "Wait a few days",
-        "Slightly unfavourable — a dip may be coming soon",
+        "Slightly bearish outlook",
+        "Mildly unfavourable — momentum may soften in the near term",
     ),
     "WAIT": (
         "🟡",
         "#f1c40f",
-        "No clear signal",
-        "Mixed signals — check again in a few days",
+        "No clear direction",
+        "Mixed signals — review again in a few days",
     ),
 }
+
+# ---------------------------------------------------------------------------
+# Disclaimer — rendered on every page
+# ---------------------------------------------------------------------------
+_DISCLAIMER_HTML = """
+<div style="position: fixed; bottom: 0; left: 0; right: 0; z-index: 9999;
+     background: rgba(30,30,30,0.95); color: #999; font-size: 0.7rem;
+     text-align: center; padding: 4px 12px; border-top: 1px solid #444;">
+⚠️ <strong>Educational tool only — not investment advice.</strong>
+Analysis is based on publicly available data and technical indicators.
+Past performance does not guarantee future results. Consult a SEBI-registered
+investment adviser before making financial decisions.
+</div>
+"""
+
+
+def render_disclaimer():
+    """Render the fixed-position compliance disclaimer footer."""
+    import streamlit as st
+
+    st.markdown(_DISCLAIMER_HTML, unsafe_allow_html=True)
 
 
 def metal_inr_series(metal_hist, fx_hist, premium=1.03):

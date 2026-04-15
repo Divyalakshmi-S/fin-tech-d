@@ -22,6 +22,13 @@ from datetime import datetime, timedelta, date
 
 
 # ---------------------------------------------------------------------------
+# Singleton ThreadPoolExecutor — shared across the module to avoid
+# repeatedly creating/destroying thread pools.
+# ---------------------------------------------------------------------------
+_SHARED_POOL = ThreadPoolExecutor(max_workers=8)
+
+
+# ---------------------------------------------------------------------------
 # Portfolio loader — defined later in file (after AMFI section)
 # Re-exported here for import compatibility:
 #   from analysis import load_portfolio_extended
@@ -136,8 +143,37 @@ def metal_price_inr_weekly(ticker="GC=F", premium=None):
 
 
 # ---------------------------------------------------------------------------
-# Ticker validation
+# Ticker validation & input sanitization (C5)
 # ---------------------------------------------------------------------------
+
+import re as _re
+
+
+def sanitize_ticker(ticker):
+    """Sanitize a ticker symbol: strip whitespace, uppercase, remove invalid chars."""
+    if not ticker:
+        return ""
+    t = ticker.strip().upper()
+    # Allow alphanumeric, dots, hyphens, =, ^, & (for M&M etc.)
+    t = _re.sub(r"[^A-Z0-9.\-=^&]", "", t)
+    # Max 30 chars
+    return t[:30]
+
+
+def sanitize_amount(value, min_val=0, max_val=100000000):
+    """Sanitize a monetary amount: ensure positive and within reasonable range."""
+    try:
+        v = float(value)
+        return max(min_val, min(v, max_val))
+    except (TypeError, ValueError):
+        return min_val
+
+
+def sanitize_text(text, max_length=200):
+    """Sanitize free-text input: strip, limit length."""
+    if not text:
+        return ""
+    return str(text).strip()[:max_length]
 
 
 def validate_ticker(ticker_symbol):
@@ -151,7 +187,7 @@ def validate_ticker(ticker_symbol):
     if not ticker_symbol or not ticker_symbol.strip():
         return {"valid": False, "name": None, "error": "Ticker is empty"}
 
-    ticker_symbol = ticker_symbol.strip()
+    ticker_symbol = sanitize_ticker(ticker_symbol)
 
     # Check suffix for Indian stocks
     if (
@@ -278,6 +314,31 @@ def auto_resolve_ticker(name, asset_type="stock"):
     return {"ticker": None, "name": None, "error": "Unsupported asset type"}
 
 
+# Cached AMFI NAV file — downloaded at most once per hour
+_amfi_cache = {"content": None, "ts": 0}
+
+
+def _cached_amfi_nav_file():
+    """Download AMFI NAV file with 1-hour in-memory cache."""
+    import time
+
+    now = time.time()
+    if _amfi_cache["content"] and (now - _amfi_cache["ts"]) < 3600:
+        return _amfi_cache["content"]
+    try:
+        req = urllib.request.Request(
+            "https://www.amfiindia.com/spages/NAVAll.txt",
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            content = resp.read().decode("utf-8", errors="ignore")
+        _amfi_cache["content"] = content
+        _amfi_cache["ts"] = now
+        return content
+    except Exception:
+        return _amfi_cache["content"]  # return stale if available
+
+
 def auto_resolve_amfi(name):
     """Auto-lookup AMFI scheme code from a mutual fund name.
 
@@ -290,12 +351,13 @@ def auto_resolve_amfi(name):
     search_terms = name.strip().lower().split()
 
     try:
-        req = urllib.request.Request(
-            "https://www.amfiindia.com/spages/NAVAll.txt",
-            headers={"User-Agent": "Mozilla/5.0"},
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            content = resp.read().decode("utf-8", errors="ignore")
+        content = _cached_amfi_nav_file()
+        if content is None:
+            return {
+                "amfi_code": None,
+                "scheme_name": None,
+                "error": "Could not connect to AMFI. Enter the code manually.",
+            }
 
         best_match = None
         best_score = 0
@@ -1343,9 +1405,8 @@ def analyze_existing_mf_holdings(holdings):
             "score": score,
         }
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        raw_results = list(pool.map(_analyze_one, mf_holdings))
-        results = [r for r in raw_results if r is not None]
+    raw_results = list(_SHARED_POOL.map(_analyze_one, mf_holdings))
+    results = [r for r in raw_results if r is not None]
 
     # Sort: CONSIDER SELLING first, then HOLD & WATCH, HOLD, ADD MORE
     verdict_order = {"CONSIDER SELLING": 0, "HOLD & WATCH": 1, "HOLD": 2, "ADD MORE": 3}
@@ -1770,9 +1831,8 @@ def analyze_existing_stock_holdings(holdings):
             "score": score,
         }
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        raw_results = list(pool.map(_analyze_one, stock_holdings))
-        results = [r for r in raw_results if r is not None]
+    raw_results = list(_SHARED_POOL.map(_analyze_one, stock_holdings))
+    results = [r for r in raw_results if r is not None]
 
     # Sort: worst verdict first
     verdict_order = {
@@ -1829,12 +1889,20 @@ def _get_market_trend():
 # --- Goal persistence ---
 
 
-def save_goal(goal):
-    """Save a financial goal to data/goals.json.
+def save_goal(goal, user_id=None):
+    """Save a financial goal to DB or data/goals.json.
 
     goal dict should have: name, target, years, expected_return, monthly_sip, created_date
     """
     import json, os
+
+    try:
+        import db as _db
+
+        if _db.is_db_available():
+            return _db.save_goal(goal, user_id=user_id)
+    except ImportError:
+        pass
 
     goals_path = os.path.join(os.path.dirname(__file__), "data", "goals.json")
     goals = load_goals()
@@ -1849,9 +1917,17 @@ def save_goal(goal):
     return goal["id"]
 
 
-def load_goals():
-    """Load saved goals from data/goals.json."""
+def load_goals(user_id=None):
+    """Load saved goals from DB or data/goals.json."""
     import json, os
+
+    try:
+        import db as _db
+
+        if _db.is_db_available() and user_id:
+            return _db.load_goals(user_id=user_id)
+    except ImportError:
+        pass
 
     goals_path = os.path.join(os.path.dirname(__file__), "data", "goals.json")
     try:
@@ -1861,9 +1937,18 @@ def load_goals():
         return []
 
 
-def delete_goal(goal_id):
+def delete_goal(goal_id, user_id=None):
     """Delete a goal by ID."""
     import json, os
+
+    try:
+        import db as _db
+
+        if _db.is_db_available() and user_id:
+            _db.delete_goal(goal_id, user_id=user_id)
+            return
+    except ImportError:
+        pass
 
     goals_path = os.path.join(os.path.dirname(__file__), "data", "goals.json")
     goals = load_goals()
@@ -2298,9 +2383,25 @@ def get_fundamental_metrics(ticker_symbol):
 # Main analysis for a single ticker
 # ---------------------------------------------------------------------------
 
+# In-memory cache for analyze_ticker results (TTL = 5 min)
+_ticker_cache = {}
+_TICKER_CACHE_TTL = 300  # seconds
+
 
 def analyze_ticker(ticker_symbol):
-    """Fetch and analyze a single ticker. Returns dict or None."""
+    """Fetch and analyze a single ticker. Returns dict or None. Cached 5 min."""
+    now = datetime.now().timestamp()
+    cached = _ticker_cache.get(ticker_symbol)
+    if cached and (now - cached[0]) < _TICKER_CACHE_TTL:
+        return cached[1]
+
+    result = _analyze_ticker_impl(ticker_symbol)
+    _ticker_cache[ticker_symbol] = (now, result)
+    return result
+
+
+def _analyze_ticker_impl(ticker_symbol):
+    """Actual implementation of analyze_ticker."""
     try:
         ticker = yf.Ticker(ticker_symbol)
 
@@ -2534,10 +2635,9 @@ def estimate_sip_value(ticker_symbol, monthly_amount, months=12, pause_periods=N
 
 
 def analyze_portfolio(holdings):
-    """Run analysis on all holdings that have tickers (parallelized)."""
+    """Run analysis on all holdings that have tickers (parallelized when > 3)."""
     results = []
     tickers_to_analyze = []
-    index_map = {}
 
     for i, h in enumerate(holdings):
         if not h["ticker"]:
@@ -2556,8 +2656,20 @@ def analyze_portfolio(holdings):
             )
         return idx, {"holding": h, "analysis": analysis, "sip_value": sip_value}
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {pool.submit(_analyze_one, item): item for item in tickers_to_analyze}
+    if len(tickers_to_analyze) <= 3:
+        # Sequential — thread pool overhead not worth it for few tickers
+        for item in tickers_to_analyze:
+            try:
+                idx, result = _analyze_one(item)
+                results[idx] = result
+            except Exception:
+                idx = item[0]
+                h = item[1]
+                results[idx] = {"holding": h, "analysis": None, "sip_value": None}
+    else:
+        futures = {
+            _SHARED_POOL.submit(_analyze_one, item): item for item in tickers_to_analyze
+        }
         for future in as_completed(futures):
             try:
                 idx, result = future.result()
@@ -2649,14 +2761,16 @@ def fetch_news(category=None, max_items=5):
     feeds = NEWS_FEEDS if category is None else {category: NEWS_FEEDS.get(category, "")}
     all_news = []
 
-    for cat, url in feeds.items():
+    def _fetch_one_feed(cat_url):
+        cat, url = cat_url
+        items = []
         if not url:
-            continue
+            return items
         try:
             feed = feedparser.parse(url)
             for entry in feed.entries[:max_items]:
                 sentiment = _simple_sentiment(entry.title)
-                all_news.append(
+                items.append(
                     {
                         "category": cat,
                         "title": entry.title,
@@ -2666,6 +2780,14 @@ def fetch_news(category=None, max_items=5):
                         "summary": _extract_summary(entry),
                     }
                 )
+        except Exception:
+            pass
+        return items
+
+    futures = [_SHARED_POOL.submit(_fetch_one_feed, item) for item in feeds.items()]
+    for future in as_completed(futures):
+        try:
+            all_news.extend(future.result())
         except Exception:
             continue
 
@@ -2986,16 +3108,23 @@ SECTOR_TICKERS = {
 
 
 def scan_top_movers(tickers=None, top_n=5):
-    """Find top gainers and losers from a watchlist (parallelized)."""
+    """Find top gainers and losers from a watchlist (batch download)."""
     tickers = tickers or WATCHLIST_TICKERS
     movers = []
 
-    def _scan_one(sym):
+    try:
+        data = yf.download(
+            list(tickers), period="1mo", group_by="ticker", progress=False, threads=True
+        )
+    except Exception:
+        return [], []
+
+    for sym in tickers:
         try:
-            t = yf.Ticker(sym)
-            hist = t.history(period="1mo")
+            hist = data[sym] if len(tickers) > 1 else data
+            hist = hist.dropna(subset=["Close"])
             if len(hist) < 2:
-                return None
+                continue
             curr = hist["Close"].iloc[-1]
             prev = hist["Close"].iloc[-2]
             pct = round(((curr - prev) / prev) * 100, 2)
@@ -3017,21 +3146,19 @@ def scan_top_movers(tickers=None, top_n=5):
                     else:
                         break
 
-            return {
-                "ticker": sym,
-                "name": sym.replace(".NS", ""),
-                "price": round(curr, 2),
-                "change_pct": pct,
-                "rsi": rsi,
-                "vol_ratio": vol_ratio,
-                "streak": streak,
-            }
+            movers.append(
+                {
+                    "ticker": sym,
+                    "name": sym.replace(".NS", ""),
+                    "price": round(float(curr), 2),
+                    "change_pct": pct,
+                    "rsi": rsi,
+                    "vol_ratio": vol_ratio,
+                    "streak": streak,
+                }
+            )
         except Exception:
-            return None
-
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        results = pool.map(_scan_one, tickers)
-        movers = [r for r in results if r is not None]
+            continue
 
     movers.sort(key=lambda x: x["change_pct"], reverse=True)
     gainers = movers[:top_n]
@@ -3187,9 +3314,7 @@ def scan_oversold_opportunities(tickers=None):
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        results = pool.map(_check_one, tickers)
-        opportunities = [r for r in results if r is not None]
+    opportunities = [r for r in _SHARED_POOL.map(_check_one, tickers) if r is not None]
 
     urgency_order = {"high": 0, "medium": 1, "low": 2}
     opportunities.sort(key=lambda x: urgency_order.get(x["urgency"], 3))
@@ -3323,7 +3448,7 @@ def suggest_stock_swaps(sell_ticker, sell_amount, holdings, tickers=None):
 
 
 def scan_sector_performance():
-    """Calculate average daily change per sector and return per-stock data (parallelized).
+    """Calculate average daily change per sector and return per-stock data (batch download).
 
     Returns dict: {sector: {"avg_change": float, "stocks": [{"name", "price", "change_pct"}, ...]}}
     """
@@ -3332,30 +3457,37 @@ def scan_sector_performance():
     for tickers in SECTOR_TICKERS.values():
         all_tickers.update(tickers)
 
-    def _fetch_one(sym):
+    all_tickers_list = list(all_tickers)
+
+    # Batch download all ticker data at once
+    try:
+        data = yf.download(
+            all_tickers_list,
+            period="5d",
+            group_by="ticker",
+            progress=False,
+            threads=True,
+        )
+    except Exception:
+        return {}
+
+    ticker_data = {}
+    for sym in all_tickers_list:
         try:
-            t = yf.Ticker(sym)
-            hist = t.history(period="5d")
+            hist = data[sym] if len(all_tickers_list) > 1 else data
+            hist = hist.dropna(subset=["Close"])
             if len(hist) >= 2:
                 curr = hist["Close"].iloc[-1]
                 prev = hist["Close"].iloc[-2]
                 pct = round(((curr - prev) / prev) * 100, 2)
-                return sym, {
+                ticker_data[sym] = {
                     "ticker": sym,
                     "name": sym.replace(".NS", ""),
-                    "price": round(curr, 2),
+                    "price": round(float(curr), 2),
                     "change_pct": pct,
                 }
         except Exception:
-            pass
-        return sym, None
-
-    # Fetch all stock data in parallel
-    ticker_data = {}
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        for sym, data in pool.map(lambda s: _fetch_one(s), all_tickers):
-            if data:
-                ticker_data[sym] = data
+            continue
 
     # Build sector results from fetched data
     sector_perf = {}
@@ -4225,19 +4357,8 @@ def backtest_metal_prediction(metal="gold", lookback_months=6, hold_days=7):
 
 
 def save_gold_prediction(prediction):
-    """Log a gold prediction to data/gold_predictions.json for tracking accuracy."""
+    """Log a gold prediction to DB or data/gold_predictions.json for tracking accuracy."""
     import os
-
-    log_path = os.path.join(os.path.dirname(__file__), "data", "gold_predictions.json")
-
-    # Load existing predictions
-    predictions = []
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, "r") as f:
-                predictions = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            predictions = []
 
     entry = {
         "date": datetime.now().strftime("%Y-%m-%d"),
@@ -4254,6 +4375,25 @@ def save_gold_prediction(prediction):
         "actual_price_after": None,
         "was_correct": None,
     }
+
+    try:
+        import db as _db
+
+        if _db.is_db_available():
+            return _db.save_prediction("gold_predictions", entry, unique_keys=["date"])
+    except ImportError:
+        pass
+
+    log_path = os.path.join(os.path.dirname(__file__), "data", "gold_predictions.json")
+
+    # Load existing predictions
+    predictions = []
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r") as f:
+                predictions = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            predictions = []
 
     # Don't duplicate same-day predictions
     today = entry["date"]
@@ -5359,18 +5499,8 @@ def predict_stock_buy(ticker_symbol, company_name="", use_news=True):
 
 
 def save_stock_prediction(prediction, ticker_symbol):
-    """Log a stock prediction to data/stock_predictions.json for tracking accuracy."""
+    """Log a stock prediction to DB or data/stock_predictions.json for tracking accuracy."""
     import os
-
-    log_path = os.path.join(os.path.dirname(__file__), "data", "stock_predictions.json")
-
-    predictions = []
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, "r") as f:
-                predictions = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            predictions = []
 
     entry = {
         "date": datetime.now().strftime("%Y-%m-%d"),
@@ -5389,6 +5519,26 @@ def save_stock_prediction(prediction, ticker_symbol):
         "actual_price_after": None,
         "was_correct": None,
     }
+
+    try:
+        import db as _db
+
+        if _db.is_db_available():
+            return _db.save_prediction(
+                "stock_predictions", entry, unique_keys=["date", "ticker"]
+            )
+    except ImportError:
+        pass
+
+    log_path = os.path.join(os.path.dirname(__file__), "data", "stock_predictions.json")
+
+    predictions = []
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r") as f:
+                predictions = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            predictions = []
 
     # Don't duplicate same-day + same-ticker predictions
     today = entry["date"]
@@ -5500,20 +5650,8 @@ def get_stock_prediction_learnings(ticker_symbol=None):
 
 
 def save_scanner_suggestion(suggestion):
-    """Log a scanner buy suggestion to data/scanner_predictions.json for tracking."""
+    """Log a scanner buy suggestion to DB or data/scanner_predictions.json for tracking."""
     import os
-
-    log_path = os.path.join(
-        os.path.dirname(__file__), "data", "scanner_predictions.json"
-    )
-
-    predictions = []
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, "r") as f:
-                predictions = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            predictions = []
 
     entry = {
         "date": datetime.now().strftime("%Y-%m-%d"),
@@ -5539,6 +5677,28 @@ def save_scanner_suggestion(suggestion):
         "was_correct_7d": None,
         "was_correct_30d": None,
     }
+
+    try:
+        import db as _db
+
+        if _db.is_db_available():
+            return _db.save_prediction(
+                "scanner_predictions", entry, unique_keys=["date", "ticker"]
+            )
+    except ImportError:
+        pass
+
+    log_path = os.path.join(
+        os.path.dirname(__file__), "data", "scanner_predictions.json"
+    )
+
+    predictions = []
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r") as f:
+                predictions = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            predictions = []
 
     # Don't duplicate same-day + same-ticker
     today = entry["date"]
@@ -6266,19 +6426,8 @@ def predict_silver_buy(use_news=True):
 
 
 def save_silver_prediction(prediction):
-    """Log a silver prediction to data/silver_predictions.json."""
+    """Log a silver prediction to DB or data/silver_predictions.json."""
     import os
-
-    log_path = os.path.join(
-        os.path.dirname(__file__), "data", "silver_predictions.json"
-    )
-    predictions = []
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, "r") as f:
-                predictions = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            predictions = []
 
     entry = {
         "date": datetime.now().strftime("%Y-%m-%d"),
@@ -6295,6 +6444,27 @@ def save_silver_prediction(prediction):
         "actual_price_after": None,
         "was_correct": None,
     }
+
+    try:
+        import db as _db
+
+        if _db.is_db_available():
+            return _db.save_prediction(
+                "silver_predictions", entry, unique_keys=["date"]
+            )
+    except ImportError:
+        pass
+
+    log_path = os.path.join(
+        os.path.dirname(__file__), "data", "silver_predictions.json"
+    )
+    predictions = []
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r") as f:
+                predictions = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            predictions = []
 
     today = entry["date"]
     predictions = [p for p in predictions if p["date"] != today]
@@ -6459,17 +6629,22 @@ def _aggregate_transactions(transactions):
     }
 
 
-def load_portfolio_extended(path="data/portfolio.json"):
-    """Load portfolio from JSON with buy_date, buy_price, quantity fields.
+def load_portfolio_extended(path="data/portfolio.json", from_rows=None):
+    """Load portfolio from JSON or pre-loaded rows with buy_date, buy_price, quantity fields.
 
     Supports two investment modes:
       - lumpsum: amount = buy_price × quantity (supports multi-transaction)
       - sip: amount = sip_monthly × months_elapsed
+
+    If from_rows is provided, uses those dicts directly instead of reading from file.
     """
     holdings = []
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+        if from_rows is not None:
+            data = from_rows
+        else:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
         for row in data:
             investment_mode = row.get("investment_mode", "lumpsum")
             sip_monthly = float(row.get("sip_monthly", 0) or 0)

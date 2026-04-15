@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .vscode/
+.streamlit/secrets.toml
 # data/*.xlsx
 # data/*.json
 data/weekly_preview.html

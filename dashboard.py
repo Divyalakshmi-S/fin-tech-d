@@ -2,6 +2,8 @@ import streamlit as st
 from datetime import datetime
 
 from analysis import load_portfolio_extended
+import auth
+import db
 
 from views import (
     overview,
@@ -15,7 +17,16 @@ from views import (
     learn,
     manage,
     predictions,
+    net_worth,
+    calculators,
+    tax_planning,
+    financial_health,
+    checkup,
+    rebalancing,
+    retirement,
+    family,
 )
+from ui_helpers import render_disclaimer
 
 
 # --- Config ---
@@ -28,67 +39,104 @@ st.set_page_config(
 )
 
 # --- Custom CSS ---
+
+# Theme toggle
+if "theme" not in st.session_state:
+    st.session_state["theme"] = "dark"
+
+if st.session_state["theme"] == "light":
+    _bg = "#f5f5f5"
+    _card_bg = "linear-gradient(135deg, #ffffff 0%, #f0f0f5 100%)"
+    _card_border = "#d0d0e0"
+    _text_muted = "#606080"
+    _sidebar_bg = "linear-gradient(180deg, #e8e8f0 0%, #dde4f0 100%)"
+    _section_border = "#b0b0d0"
+    _shadow = "rgba(0,0,0,0.05)"
+else:
+    _bg = ""  # use Streamlit default dark
+    _card_bg = "linear-gradient(135deg, #1e1e2e 0%, #2d2d44 100%)"
+    _card_border = "#3d3d5c"
+    _text_muted = "#a0a0b8"
+    _sidebar_bg = "linear-gradient(180deg, #1a1a2e 0%, #16213e 100%)"
+    _section_border = "#4a4a6a"
+    _shadow = "rgba(0,0,0,0.15)"
+
 st.markdown(
-    """
+    f"""
 <style>
     /* Tighter spacing */
-    .block-container { padding-top: 1rem; padding-bottom: 1rem; }
+    .block-container {{ padding-top: 1rem; padding-bottom: 1rem; }}
 
     /* Card-like containers */
-    div[data-testid="stMetric"] {
-        background: linear-gradient(135deg, #1e1e2e 0%, #2d2d44 100%);
-        border: 1px solid #3d3d5c;
+    div[data-testid="stMetric"] {{
+        background: {_card_bg};
+        border: 1px solid {_card_border};
         border-radius: 12px;
         padding: 16px 20px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    }
-    div[data-testid="stMetric"] label {
+        box-shadow: 0 2px 8px {_shadow};
+    }}
+    div[data-testid="stMetric"] label {{
         font-size: 0.85rem !important;
-        color: #a0a0b8 !important;
-    }
-    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        color: {_text_muted} !important;
+    }}
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] {{
         font-size: 1.4rem !important;
         font-weight: 700 !important;
-    }
+    }}
 
     /* Section headers */
-    h2 {
-        border-bottom: 2px solid #4a4a6a;
+    h2 {{
+        border-bottom: 2px solid {_section_border};
         padding-bottom: 0.4rem;
         margin-top: 1.5rem !important;
-    }
+    }}
 
     /* Sidebar */
-    section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
-    }
+    section[data-testid="stSidebar"] {{
+        background: {_sidebar_bg};
+    }}
 
     /* Expanders */
-    details {
-        border: 1px solid #3d3d5c !important;
+    details {{
+        border: 1px solid {_card_border} !important;
         border-radius: 10px !important;
         margin-bottom: 0.5rem;
-    }
+    }}
 
     /* Tabs */
-    button[data-baseweb="tab"] {
+    button[data-baseweb="tab"] {{
         font-weight: 600 !important;
-    }
+    }}
 
     /* Alert boxes */
-    .stAlert { border-radius: 8px; }
+    .stAlert {{ border-radius: 8px; }}
 
     /* Hide default footer */
-    footer { visibility: hidden; }
+    footer {{ visibility: hidden; }}
 </style>
 """,
     unsafe_allow_html=True,
 )
 
+# --- Authentication Gate ---
+if not auth.render_auth_page():
+    st.stop()
+
+user_id = auth.get_user_id()
+
 
 # --- Sidebar Navigation ---
 st.sidebar.title("📊 Finance Dashboard")
+auth.render_sidebar_user()
 st.sidebar.caption(f"📅 {datetime.now().strftime('%d %b %Y, %I:%M %p')}")
+
+# Theme toggle
+current_theme = st.session_state.get("theme", "dark")
+theme_label = "🌙 Dark" if current_theme == "dark" else "☀️ Light"
+if st.sidebar.button(f"Theme: {theme_label}"):
+    st.session_state["theme"] = "light" if current_theme == "dark" else "dark"
+    st.rerun()
+
 st.sidebar.divider()
 
 page = st.sidebar.radio(
@@ -102,11 +150,20 @@ page = st.sidebar.radio(
         "───── My Money ─────",
         "📁 My Portfolio",
         "🔬 Holdings Analysis",
+        "💎 Net Worth",
         "🎯 Goals",
         "💰 Budget",
+        "───── Planning ─────",
+        "📋 Tax Planning",
+        "🧮 Calculators",
+        "⚖️ Rebalancing",
+        "🏦 Retirement",
+        "👨‍👩‍👧‍👦 Family",
+        "🛡️ Financial Health",
+        "🏥 Health Checkup",
         "───── Tools ─────",
-        "� Prediction Scorecard",
-        "�📚 Learn",
+        "📈 Prediction Scorecard",
+        "📚 Learn",
         "⚙️ Manage Portfolio",
     ],
     label_visibility="collapsed",
@@ -119,11 +176,14 @@ if page.startswith("─"):
 
 # Load data once
 @st.cache_data(ttl=60)
-def load_holdings():
+def load_holdings(_user_id):
+    if db.is_db_available() and _user_id:
+        portfolio_rows = db.load_portfolio(_user_id)
+        return load_portfolio_extended(from_rows=portfolio_rows)
     return load_portfolio_extended()
 
 
-holdings = load_holdings()
+holdings = load_holdings(user_id)
 
 
 # --- Page Router ---
@@ -134,16 +194,27 @@ PAGE_MAP = {
     "🔬 Holdings Analysis": holdings_page.render,
     "🔎 Market Scanner": scanner.render,
     "📰 News": news.render,
+    "💎 Net Worth": net_worth.render,
     "🎯 Goals": goals.render,
     "💰 Budget": budget.render,
-    "� Prediction Scorecard": predictions.render,
-    "�📚 Learn": learn.render,
+    "📋 Tax Planning": tax_planning.render,
+    "🧮 Calculators": calculators.render,
+    "⚖️ Rebalancing": rebalancing.render,
+    "🏦 Retirement": retirement.render,
+    "👨‍👩‍👧‍👦 Family": family.render,
+    "🛡️ Financial Health": financial_health.render,
+    "🏥 Health Checkup": checkup.render,
+    "📈 Prediction Scorecard": predictions.render,
+    "📚 Learn": learn.render,
     "⚙️ Manage Portfolio": manage.render,
 }
 
 render_fn = PAGE_MAP.get(page)
 if render_fn:
     render_fn(holdings)
+
+# Compliance disclaimer on every page
+render_disclaimer()
 
 
 # --- Sidebar Footer ---

@@ -3,10 +3,16 @@ import pandas as pd
 import json
 import os
 
+import db
+import auth
+
 BUDGET_PATH = "data/budget.json"
 
 
 def _load_budget():
+    user_id = auth.get_user_id()
+    if db.is_db_available() and user_id:
+        return db.load_budget(user_id)
     try:
         with open(BUDGET_PATH, encoding="utf-8") as f:
             return json.load(f)
@@ -15,6 +21,10 @@ def _load_budget():
 
 
 def _save_budget(data):
+    user_id = auth.get_user_id()
+    if db.is_db_available() and user_id:
+        db.save_budget(data, user_id)
+        return
     os.makedirs(os.path.dirname(BUDGET_PATH), exist_ok=True)
     tmp_path = BUDGET_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:

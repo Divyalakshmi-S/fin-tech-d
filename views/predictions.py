@@ -3,6 +3,7 @@ import json
 import os
 from datetime import datetime, date, timedelta
 
+import db
 from analysis import (
     verify_gold_predictions,
     verify_silver_predictions,
@@ -18,6 +19,9 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 
 def _load_predictions(filename):
+    table_name = filename.replace(".json", "")
+    if db.is_db_available():
+        return db.load_predictions(table_name)
     path = os.path.join(DATA_DIR, filename)
     if not os.path.exists(path):
         return []
