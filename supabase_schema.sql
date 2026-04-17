@@ -4,8 +4,16 @@
 --
 -- Auth: handled by Streamlit (st.login), NOT Supabase Auth.
 -- user_id = user's email address (TEXT).
--- App uses SUPABASE_SERVICE_KEY which bypasses RLS.
--- RLS is enabled to block direct anon/public access.
+-- App uses SUPABASE_SERVICE_KEY (bot) or SUPABASE_KEY (dashboard).
+-- RLS is enabled — anon key has read-only on predictions,
+-- service key bypasses RLS for writes.
+--
+-- SECURITY NOTES:
+-- • Never expose SUPABASE_SERVICE_KEY in client-side code.
+-- • Dashboard uses the anon key; bot/GitHub Actions uses service key.
+-- • All user tables have RLS enabled with no public policies
+--   (only service-key writes succeed).
+-- • Prediction tables allow public SELECT only.
 -- =============================================================
 
 -- 1. User-specific tables --
@@ -34,6 +42,8 @@ CREATE TABLE IF NOT EXISTS budget (
     income      NUMERIC NOT NULL DEFAULT 0,
     expenses    NUMERIC NOT NULL DEFAULT 0,
     investments NUMERIC NOT NULL DEFAULT 0,
+    expense_categories JSONB NOT NULL DEFAULT '{}',
+    budget_items JSONB NOT NULL DEFAULT '[]',
     updated_at  TIMESTAMPTZ DEFAULT now()
 );
 
@@ -62,7 +72,8 @@ CREATE TABLE IF NOT EXISTS gold_predictions (
     factor_scores JSONB NOT NULL DEFAULT '[]',
     verified    BOOLEAN NOT NULL DEFAULT false,
     actual_price_after NUMERIC,
-    was_correct BOOLEAN
+    was_correct BOOLEAN,
+    actual_change_pct NUMERIC
 );
 
 CREATE TABLE IF NOT EXISTS silver_predictions (
@@ -76,7 +87,8 @@ CREATE TABLE IF NOT EXISTS silver_predictions (
     factor_scores JSONB NOT NULL DEFAULT '[]',
     verified    BOOLEAN NOT NULL DEFAULT false,
     actual_price_after NUMERIC,
-    was_correct BOOLEAN
+    was_correct BOOLEAN,
+    actual_change_pct NUMERIC
 );
 
 CREATE TABLE IF NOT EXISTS scanner_predictions (
@@ -95,10 +107,17 @@ CREATE TABLE IF NOT EXISTS scanner_predictions (
     pe_ratio    NUMERIC,
     sector      TEXT NOT NULL DEFAULT '',
     verified    BOOLEAN NOT NULL DEFAULT false,
+    verified_7d BOOLEAN NOT NULL DEFAULT false,
+    verified_30d BOOLEAN NOT NULL DEFAULT false,
     actual_price_7d NUMERIC,
     actual_price_30d NUMERIC,
+    change_pct_7d NUMERIC,
+    change_pct_30d NUMERIC,
     was_correct_7d BOOLEAN,
     was_correct_30d BOOLEAN,
+    was_correct BOOLEAN,
+    actual_price_after NUMERIC,
+    actual_change_pct NUMERIC,
     UNIQUE(date, ticker)
 );
 
@@ -116,6 +135,7 @@ CREATE TABLE IF NOT EXISTS stock_predictions (
     verified    BOOLEAN NOT NULL DEFAULT false,
     actual_price_after NUMERIC,
     was_correct BOOLEAN,
+    actual_change_pct NUMERIC,
     UNIQUE(date, ticker)
 );
 
@@ -203,6 +223,37 @@ CREATE TABLE IF NOT EXISTS target_allocation (
     UNIQUE(user_id, asset_class)
 );
 
+CREATE TABLE IF NOT EXISTS gold_buyday_predictions (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    date        TEXT NOT NULL UNIQUE,
+    month       TEXT NOT NULL DEFAULT '',
+    predicted_best_day INT,
+    predicted_worst_day INT,
+    best_day_score NUMERIC,
+    worst_day_score NUMERIC,
+    day_scores  JSONB NOT NULL DEFAULT '[]',
+    reasoning   JSONB NOT NULL DEFAULT '[]',
+    verified    BOOLEAN NOT NULL DEFAULT false,
+    actual_best_day INT,
+    was_correct BOOLEAN,
+    created_at  TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS gold_buyday_weights (
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    month_rank  NUMERIC NOT NULL DEFAULT 1.0,
+    pct_from_low NUMERIC NOT NULL DEFAULT 1.5,
+    win_rate    NUMERIC NOT NULL DEFAULT 2.0,
+    recent_pct  NUMERIC NOT NULL DEFAULT 1.0,
+    recent_win  NUMERIC NOT NULL DEFAULT 1.5,
+    avg_rank    NUMERIC NOT NULL DEFAULT 0.5,
+    dow_bias    NUMERIC NOT NULL DEFAULT 0.8,
+    vol_regime  NUMERIC NOT NULL DEFAULT 0.6,
+    vix_shift   NUMERIC NOT NULL DEFAULT 1.0,
+    dxy_trend   NUMERIC NOT NULL DEFAULT 0.8,
+    updated_at  TIMESTAMPTZ DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS fixed_instruments (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     user_id     TEXT NOT NULL,
@@ -258,11 +309,15 @@ ALTER TABLE gold_predictions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE silver_predictions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE scanner_predictions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_predictions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE gold_buyday_predictions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE gold_buyday_weights ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Anyone can read gold_predictions" ON gold_predictions FOR SELECT USING (true);
 CREATE POLICY "Anyone can read silver_predictions" ON silver_predictions FOR SELECT USING (true);
 CREATE POLICY "Anyone can read scanner_predictions" ON scanner_predictions FOR SELECT USING (true);
 CREATE POLICY "Anyone can read stock_predictions" ON stock_predictions FOR SELECT USING (true);
+CREATE POLICY "Anyone can read gold_buyday_predictions" ON gold_buyday_predictions FOR SELECT USING (true);
+CREATE POLICY "Anyone can read gold_buyday_weights" ON gold_buyday_weights FOR SELECT USING (true);
 
 -- 4. Indexes --
 
@@ -277,3 +332,30 @@ CREATE INDEX IF NOT EXISTS idx_dividends_user ON dividends(user_id);
 CREATE INDEX IF NOT EXISTS idx_family_members_owner ON family_members(owner_id);
 CREATE INDEX IF NOT EXISTS idx_family_portfolio_member ON family_portfolio(member_id);
 CREATE INDEX IF NOT EXISTS idx_fixed_instruments_user ON fixed_instruments(user_id);
+CREATE INDEX IF NOT EXISTS idx_target_allocation_user ON target_allocation(user_id);
+CREATE INDEX IF NOT EXISTS idx_gold_buyday_pred_date ON gold_buyday_predictions(date);
+
+
+-- =============================================================
+-- 5. Migration helper (run on EXISTING databases only)
+-- If you already have the tables, run these ALTER statements
+-- to add new columns. Skip if using fresh schema above.
+-- =============================================================
+
+-- Budget: add JSONB columns
+-- ALTER TABLE budget ADD COLUMN IF NOT EXISTS expense_categories JSONB NOT NULL DEFAULT '{}';
+-- ALTER TABLE budget ADD COLUMN IF NOT EXISTS budget_items JSONB NOT NULL DEFAULT '[]';
+
+-- Prediction tables: add actual_change_pct
+-- ALTER TABLE gold_predictions ADD COLUMN IF NOT EXISTS actual_change_pct NUMERIC;
+-- ALTER TABLE silver_predictions ADD COLUMN IF NOT EXISTS actual_change_pct NUMERIC;
+-- ALTER TABLE stock_predictions ADD COLUMN IF NOT EXISTS actual_change_pct NUMERIC;
+
+-- Scanner predictions: add verification columns
+-- ALTER TABLE scanner_predictions ADD COLUMN IF NOT EXISTS verified_7d BOOLEAN NOT NULL DEFAULT false;
+-- ALTER TABLE scanner_predictions ADD COLUMN IF NOT EXISTS verified_30d BOOLEAN NOT NULL DEFAULT false;
+-- ALTER TABLE scanner_predictions ADD COLUMN IF NOT EXISTS change_pct_7d NUMERIC;
+-- ALTER TABLE scanner_predictions ADD COLUMN IF NOT EXISTS change_pct_30d NUMERIC;
+-- ALTER TABLE scanner_predictions ADD COLUMN IF NOT EXISTS was_correct BOOLEAN;
+-- ALTER TABLE scanner_predictions ADD COLUMN IF NOT EXISTS actual_price_after NUMERIC;
+-- ALTER TABLE scanner_predictions ADD COLUMN IF NOT EXISTS actual_change_pct NUMERIC;

@@ -2165,90 +2165,24 @@ def _get_market_trend():
 
 
 def save_goal(goal, user_id=None):
-    """Save a financial goal to DB or data/goals.json.
+    """Save a financial goal to DB or data/goals.json."""
+    import db as _db
 
-    goal dict should have: name, target, years, expected_return, monthly_sip, created_date
-    """
-    import json, os
-
-    try:
-        import db as _db
-
-        if _db.is_db_available():
-            return _db.save_goal(goal, user_id=user_id)
-    except ImportError:
-        pass
-
-    try:
-        import db as _db
-
-        goals_path = _db._json_path("goals.json", user_id=user_id)
-    except ImportError:
-        goals_path = os.path.join(os.path.dirname(__file__), "..", "data", "goals.json")
-    goals = load_goals(user_id=user_id)
-    goal["id"] = max((g.get("id", 0) for g in goals), default=0) + 1
-    if "created_date" not in goal:
-        goal["created_date"] = datetime.now().strftime("%Y-%m-%d")
-    goals.append(goal)
-    os.makedirs(os.path.dirname(goals_path), exist_ok=True)
-    tmp_path = goals_path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(goals, f, indent=2)
-    os.replace(tmp_path, goals_path)
-    return goal["id"]
+    return _db.save_goal(goal, user_id=user_id)
 
 
 def load_goals(user_id=None):
     """Load saved goals from DB or data/goals.json."""
-    import json, os
+    import db as _db
 
-    try:
-        import db as _db
-
-        if _db.is_db_available() and user_id:
-            return _db.load_goals(user_id=user_id)
-    except ImportError:
-        pass
-
-    try:
-        import db as _db
-
-        goals_path = _db._json_path("goals.json", user_id=user_id)
-    except ImportError:
-        goals_path = os.path.join(os.path.dirname(__file__), "..", "data", "goals.json")
-    try:
-        with open(goals_path, encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
+    return _db.load_goals(user_id=user_id)
 
 
 def delete_goal(goal_id, user_id=None):
     """Delete a goal by ID."""
-    import json, os
+    import db as _db
 
-    try:
-        import db as _db
-
-        if _db.is_db_available() and user_id:
-            _db.delete_goal(goal_id, user_id=user_id)
-            return
-    except ImportError:
-        pass
-
-    try:
-        import db as _db
-
-        goals_path = _db._json_path("goals.json", user_id=user_id)
-    except ImportError:
-        goals_path = os.path.join(os.path.dirname(__file__), "..", "data", "goals.json")
-    goals = load_goals(user_id=user_id)
-    goals = [g for g in goals if g.get("id") != goal_id]
-    os.makedirs(os.path.dirname(goals_path), exist_ok=True)
-    tmp_path = goals_path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(goals, f, indent=2)
-    os.replace(tmp_path, goals_path)
+    _db.delete_goal(goal_id, user_id=user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -4372,7 +4306,7 @@ def backtest_metal_prediction(metal="gold", lookback_months=6, hold_days=7):
 
 def save_gold_prediction(prediction):
     """Log a gold prediction to DB or data/gold_predictions.json for tracking accuracy."""
-    import os
+    import db as _db
 
     entry = {
         "date": datetime.now().strftime("%Y-%m-%d"),
@@ -4390,38 +4324,7 @@ def save_gold_prediction(prediction):
         "was_correct": None,
     }
 
-    try:
-        import db as _db
-
-        if _db.is_db_available():
-            return _db.save_prediction("gold_predictions", entry, unique_keys=["date"])
-    except ImportError:
-        pass
-
-    log_path = os.path.join(
-        os.path.dirname(__file__), "..", "data", "gold_predictions.json"
-    )
-
-    # Load existing predictions
-    predictions = []
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, "r") as f:
-                predictions = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            predictions = []
-
-    # Don't duplicate same-day predictions
-    today = entry["date"]
-    predictions = [p for p in predictions if p["date"] != today]
-    predictions.append(entry)
-
-    tmp_path = log_path + ".tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(predictions, f, indent=2)
-    os.replace(tmp_path, log_path)
-
-    return entry
+    return _db.save_prediction("gold_predictions", entry, unique_keys=["date"])
 
 
 # ---------------------------------------------------------------------------
@@ -4438,7 +4341,13 @@ def _gold_buyday_path():
 
 
 def _load_buyday_history():
-    """Load gold buy-day prediction history from JSON."""
+    """Load gold buy-day prediction history from DB or JSON."""
+    try:
+        import db as _db
+
+        return _db.load_predictions("gold_buyday_predictions")
+    except Exception:
+        pass
     import os
 
     path = _gold_buyday_path()
@@ -4452,10 +4361,18 @@ def _load_buyday_history():
 
 
 def _save_buyday_history(history):
-    """Save gold buy-day prediction history to JSON."""
+    """Save gold buy-day prediction history to DB or JSON."""
+    try:
+        import db as _db
+
+        _db.update_predictions("gold_buyday_predictions", history)
+        return
+    except Exception:
+        pass
     import os
 
     path = _gold_buyday_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(history, f, indent=2, default=str)
@@ -5030,11 +4947,6 @@ def verify_gold_buyday_predictions():
 
 def _load_buyday_weights():
     """Load learned factor weights for buy-day prediction (10-factor model)."""
-    import os
-
-    weights_path = os.path.join(
-        os.path.dirname(__file__), "..", "data", "gold_buyday_weights.json"
-    )
     default = {
         "month_rank": 1.0,
         "pct_from_low": 1.5,
@@ -5047,12 +4959,29 @@ def _load_buyday_weights():
         "vix_shift": 1.0,
         "dxy_trend": 0.8,
     }
+    try:
+        import db as _db
+
+        saved = _db.load_predictions("gold_buyday_weights")
+        if saved and isinstance(saved, list) and len(saved) == 1:
+            saved = saved[0]
+        if saved and isinstance(saved, dict):
+            for key, val in default.items():
+                if key not in saved:
+                    saved[key] = val
+            return saved
+    except Exception:
+        pass
+    import os
+
+    weights_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", "gold_buyday_weights.json"
+    )
     if not os.path.exists(weights_path):
         return default
     try:
         with open(weights_path, "r") as f:
             saved = json.load(f)
-        # Migrate old weights: ensure all 10 factors present
         for key, val in default.items():
             if key not in saved:
                 saved[key] = val
@@ -5063,11 +4992,19 @@ def _load_buyday_weights():
 
 def _save_buyday_weights(weights):
     """Save learned factor weights."""
+    try:
+        import db as _db
+
+        _db.update_predictions("gold_buyday_weights", [weights])
+        return
+    except Exception:
+        pass
     import os
 
     weights_path = os.path.join(
         os.path.dirname(__file__), "..", "data", "gold_buyday_weights.json"
     )
+    os.makedirs(os.path.dirname(weights_path), exist_ok=True)
     tmp = weights_path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(weights, f, indent=2)
@@ -5918,18 +5855,10 @@ def get_prediction_learnings(asset="gold"):
 
     Returns the mistake analysis or None if not enough data.
     """
-    import os
+    import db as _db
 
-    log_path = os.path.join(
-        os.path.dirname(__file__), "..", "data", f"{asset}_predictions.json"
-    )
-    if not os.path.exists(log_path):
-        return None
-
-    try:
-        with open(log_path, "r") as f:
-            predictions = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    predictions = _db.load_predictions(f"{asset}_predictions")
+    if not predictions:
         return None
 
     return _analyze_prediction_mistakes(predictions)
@@ -5937,18 +5866,10 @@ def get_prediction_learnings(asset="gold"):
 
 def verify_gold_predictions():
     """Check past predictions against actual prices. Returns list of verified predictions."""
-    import os
+    import db as _db
 
-    log_path = os.path.join(
-        os.path.dirname(__file__), "..", "data", "gold_predictions.json"
-    )
-    if not os.path.exists(log_path):
-        return []
-
-    try:
-        with open(log_path, "r") as f:
-            predictions = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    predictions = _db.load_predictions("gold_predictions")
+    if not predictions:
         return []
 
     # Get current gold price for verification
@@ -5997,8 +5918,7 @@ def verify_gold_predictions():
         updated = True
 
     if updated:
-        with open(log_path, "w") as f:
-            json.dump(predictions, f, indent=2)
+        _db.update_predictions("gold_predictions", predictions)
 
     return predictions
 
@@ -6650,7 +6570,7 @@ def predict_stock_buy(ticker_symbol, company_name="", use_news=True):
 
 def save_stock_prediction(prediction, ticker_symbol):
     """Log a stock prediction to DB or data/stock_predictions.json for tracking accuracy."""
-    import os
+    import db as _db
 
     entry = {
         "date": datetime.now().strftime("%Y-%m-%d"),
@@ -6670,59 +6590,17 @@ def save_stock_prediction(prediction, ticker_symbol):
         "was_correct": None,
     }
 
-    try:
-        import db as _db
-
-        if _db.is_db_available():
-            return _db.save_prediction(
-                "stock_predictions", entry, unique_keys=["date", "ticker"]
-            )
-    except ImportError:
-        pass
-
-    log_path = os.path.join(
-        os.path.dirname(__file__), "..", "data", "stock_predictions.json"
+    return _db.save_prediction(
+        "stock_predictions", entry, unique_keys=["date", "ticker"]
     )
-
-    predictions = []
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, "r") as f:
-                predictions = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            predictions = []
-
-    # Don't duplicate same-day + same-ticker predictions
-    today = entry["date"]
-    predictions = [
-        p
-        for p in predictions
-        if not (p["date"] == today and p.get("ticker") == ticker_symbol)
-    ]
-    predictions.append(entry)
-
-    tmp_path = log_path + ".tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(predictions, f, indent=2)
-    os.replace(tmp_path, log_path)
-
-    return entry
 
 
 def verify_stock_predictions():
     """Check past stock predictions against actual prices. Returns list of verified predictions."""
-    import os
+    import db as _db
 
-    log_path = os.path.join(
-        os.path.dirname(__file__), "..", "data", "stock_predictions.json"
-    )
-    if not os.path.exists(log_path):
-        return []
-
-    try:
-        with open(log_path, "r") as f:
-            predictions = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    predictions = _db.load_predictions("stock_predictions")
+    if not predictions:
         return []
 
     updated = False
@@ -6764,10 +6642,7 @@ def verify_stock_predictions():
         updated = True
 
     if updated:
-        tmp_path = log_path + ".tmp"
-        with open(tmp_path, "w") as f:
-            json.dump(predictions, f, indent=2)
-        os.replace(tmp_path, log_path)
+        _db.update_predictions("stock_predictions", predictions)
 
     return predictions
 
@@ -6780,18 +6655,10 @@ def get_stock_prediction_learnings(ticker_symbol=None):
 
     Returns the mistake analysis or None if not enough data.
     """
-    import os
+    import db as _db
 
-    log_path = os.path.join(
-        os.path.dirname(__file__), "..", "data", "stock_predictions.json"
-    )
-    if not os.path.exists(log_path):
-        return None
-
-    try:
-        with open(log_path, "r") as f:
-            predictions = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    predictions = _db.load_predictions("stock_predictions")
+    if not predictions:
         return None
 
     if ticker_symbol:
@@ -6807,7 +6674,7 @@ def get_stock_prediction_learnings(ticker_symbol=None):
 
 def save_scanner_suggestion(suggestion):
     """Log a scanner buy suggestion to DB or data/scanner_predictions.json for tracking."""
-    import os
+    import db as _db
 
     entry = {
         "date": datetime.now().strftime("%Y-%m-%d"),
@@ -6834,43 +6701,9 @@ def save_scanner_suggestion(suggestion):
         "was_correct_30d": None,
     }
 
-    try:
-        import db as _db
-
-        if _db.is_db_available():
-            return _db.save_prediction(
-                "scanner_predictions", entry, unique_keys=["date", "ticker"]
-            )
-    except ImportError:
-        pass
-
-    log_path = os.path.join(
-        os.path.dirname(__file__), "..", "data", "scanner_predictions.json"
+    return _db.save_prediction(
+        "scanner_predictions", entry, unique_keys=["date", "ticker"]
     )
-
-    predictions = []
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, "r") as f:
-                predictions = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            predictions = []
-
-    # Don't duplicate same-day + same-ticker
-    today = entry["date"]
-    predictions = [
-        p
-        for p in predictions
-        if not (p["date"] == today and p.get("ticker") == suggestion["ticker"])
-    ]
-    predictions.append(entry)
-
-    tmp_path = log_path + ".tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(predictions, f, indent=2)
-    os.replace(tmp_path, log_path)
-
-    return entry
 
 
 def verify_scanner_predictions():
@@ -6880,18 +6713,10 @@ def verify_scanner_predictions():
     - 7 days: short-term bounce (was the buy call right?)
     - 30 days: medium-term trend (did it recover?)
     """
-    import os
+    import db as _db
 
-    log_path = os.path.join(
-        os.path.dirname(__file__), "..", "data", "scanner_predictions.json"
-    )
-    if not os.path.exists(log_path):
-        return []
-
-    try:
-        with open(log_path, "r") as f:
-            predictions = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    predictions = _db.load_predictions("scanner_predictions")
+    if not predictions:
         return []
 
     updated = False
@@ -6960,28 +6785,17 @@ def verify_scanner_predictions():
             continue
 
     if updated:
-        tmp_path = log_path + ".tmp"
-        with open(tmp_path, "w") as f:
-            json.dump(predictions, f, indent=2)
-        os.replace(tmp_path, log_path)
+        _db.update_predictions("scanner_predictions", predictions)
 
     return predictions
 
 
 def get_scanner_prediction_learnings():
     """Analyze scanner suggestion accuracy — which urgency levels / signals work best."""
-    import os
+    import db as _db
 
-    log_path = os.path.join(
-        os.path.dirname(__file__), "..", "data", "scanner_predictions.json"
-    )
-    if not os.path.exists(log_path):
-        return None
-
-    try:
-        with open(log_path, "r") as f:
-            predictions = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    predictions = _db.load_predictions("scanner_predictions")
+    if not predictions:
         return None
 
     return _analyze_prediction_mistakes(predictions)
@@ -7601,7 +7415,7 @@ def predict_silver_buy(use_news=True):
 
 def save_silver_prediction(prediction):
     """Log a silver prediction to DB or data/silver_predictions.json."""
-    import os
+    import db as _db
 
     entry = {
         "date": datetime.now().strftime("%Y-%m-%d"),
@@ -7619,53 +7433,15 @@ def save_silver_prediction(prediction):
         "was_correct": None,
     }
 
-    try:
-        import db as _db
-
-        if _db.is_db_available():
-            return _db.save_prediction(
-                "silver_predictions", entry, unique_keys=["date"]
-            )
-    except ImportError:
-        pass
-
-    log_path = os.path.join(
-        os.path.dirname(__file__), "..", "data", "silver_predictions.json"
-    )
-    predictions = []
-    if os.path.exists(log_path):
-        try:
-            with open(log_path, "r") as f:
-                predictions = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            predictions = []
-
-    today = entry["date"]
-    predictions = [p for p in predictions if p["date"] != today]
-    predictions.append(entry)
-
-    tmp_path = log_path + ".tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(predictions, f, indent=2)
-    os.replace(tmp_path, log_path)
-
-    return entry
+    return _db.save_prediction("silver_predictions", entry, unique_keys=["date"])
 
 
 def verify_silver_predictions():
     """Check past silver predictions against actual prices."""
-    import os
+    import db as _db
 
-    log_path = os.path.join(
-        os.path.dirname(__file__), "..", "data", "silver_predictions.json"
-    )
-    if not os.path.exists(log_path):
-        return []
-
-    try:
-        with open(log_path, "r") as f:
-            predictions = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    predictions = _db.load_predictions("silver_predictions")
+    if not predictions:
         return []
 
     try:
@@ -7713,10 +7489,7 @@ def verify_silver_predictions():
         updated = True
 
     if updated:
-        tmp_path = log_path + ".tmp"
-        with open(tmp_path, "w") as f:
-            json.dump(predictions, f, indent=2)
-        os.replace(tmp_path, log_path)
+        _db.update_predictions("silver_predictions", predictions)
 
     return predictions
 
