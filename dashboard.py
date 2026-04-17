@@ -1,5 +1,16 @@
 import streamlit as st
+import logging
+import os
 from datetime import datetime
+
+# --- Logging setup (runs once per process) ---
+_LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, _LOG_LEVEL, logging.INFO),
+    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("dashboard")
 
 try:
     from dotenv import load_dotenv
@@ -134,6 +145,9 @@ if not auth.render_auth_page():
     st.stop()
 
 user_id = auth.get_user_id()
+logger.info(
+    "Session started — user=%s, db=%s", user_id or "guest", db.is_db_available()
+)
 
 
 # --- Sidebar Navigation ---
@@ -225,7 +239,12 @@ PAGE_MAP = {
 
 render_fn = PAGE_MAP.get(page)
 if render_fn:
-    render_fn(holdings)
+    logger.info("Rendering page: %s", page)
+    try:
+        render_fn(holdings)
+    except Exception:
+        logger.exception("Error rendering page: %s", page)
+        st.error("Something went wrong loading this page. Please try refreshing.")
 
 # Compliance disclaimer on every page
 render_disclaimer()

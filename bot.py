@@ -1,9 +1,18 @@
 import os
 import csv
 import json
+import logging
 import urllib.request
 import urllib.parse
 from datetime import datetime
+
+# --- Logging setup ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("bot")
 
 try:
     from dotenv import load_dotenv
@@ -336,9 +345,7 @@ def send_telegram(msg):
     chat_id_2 = os.getenv("TELEGRAM_CHAT_ID_2")
 
     if not all([bot_token, chat_id]):
-        print(
-            "⚠️  Missing Telegram credentials. Set TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID."
-        )
+        logger.warning("Missing Telegram credentials — printing message preview")
         print("\n--- Message Preview ---")
         print(msg)
         return
@@ -369,15 +376,17 @@ def send_telegram(msg):
             )
             with urllib.request.urlopen(req) as resp:
                 if resp.status == 200:
-                    print(f"✅ Telegram message sent to chat {cid}!")
+                    logger.info("Telegram message sent to chat %s", cid)
                 else:
-                    print(f"❌ Telegram error: HTTP {resp.status}")
+                    logger.error("Telegram HTTP error: %s", resp.status)
         except Exception as e:
-            print(f"❌ Telegram error for chat {cid}: {e}")
+            logger.exception("Telegram error for chat %s", cid)
             print("\n--- Message Preview ---")
             print(msg)
 
 
 if __name__ == "__main__":
+    logger.info("Bot started")
     message = generate_message()
     send_telegram(message)
+    logger.info("Bot finished")

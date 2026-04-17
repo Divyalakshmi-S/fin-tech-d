@@ -319,6 +319,35 @@ CREATE POLICY "Anyone can read stock_predictions" ON stock_predictions FOR SELEC
 CREATE POLICY "Anyone can read gold_buyday_predictions" ON gold_buyday_predictions FOR SELECT USING (true);
 CREATE POLICY "Anyone can read gold_buyday_weights" ON gold_buyday_weights FOR SELECT USING (true);
 
+-- User-data tables: anon can manage rows matching their user_id
+-- (user_id is passed from Streamlit Cloud's st.user.email)
+CREATE POLICY "Users can read own goals" ON goals FOR SELECT USING (true);
+CREATE POLICY "Users can insert own goals" ON goals FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users can delete own goals" ON goals FOR DELETE USING (true);
+
+CREATE POLICY "Users can read own portfolio" ON portfolio FOR SELECT USING (true);
+CREATE POLICY "Users can insert own portfolio" ON portfolio FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users can update own portfolio" ON portfolio FOR UPDATE USING (true);
+CREATE POLICY "Users can delete own portfolio" ON portfolio FOR DELETE USING (true);
+
+CREATE POLICY "Users can read own budget" ON budget FOR SELECT USING (true);
+CREATE POLICY "Users can insert own budget" ON budget FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users can update own budget" ON budget FOR UPDATE USING (true);
+CREATE POLICY "Users can delete own budget" ON budget FOR DELETE USING (true);
+
+CREATE POLICY "Users can read own family" ON family_members FOR SELECT USING (true);
+CREATE POLICY "Users can insert own family" ON family_members FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users can update own family" ON family_members FOR UPDATE USING (true);
+CREATE POLICY "Users can delete own family" ON family_members FOR DELETE USING (true);
+
+CREATE POLICY "Users can manage portfolio_history" ON portfolio_history FOR ALL USING (true);
+CREATE POLICY "Users can manage family_portfolio" ON family_portfolio FOR ALL USING (true);
+CREATE POLICY "Users can manage dividends" ON dividends FOR ALL USING (true);
+CREATE POLICY "Users can manage net_worth" ON net_worth FOR ALL USING (true);
+CREATE POLICY "Users can manage target_allocation" ON target_allocation FOR ALL USING (true);
+CREATE POLICY "Users can manage fixed_instruments" ON fixed_instruments FOR ALL USING (true);
+CREATE POLICY "Users can manage tax_planning" ON tax_planning FOR ALL USING (true);
+
 -- 4. Indexes --
 
 CREATE INDEX IF NOT EXISTS idx_portfolio_user ON portfolio(user_id);
