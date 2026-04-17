@@ -127,7 +127,9 @@ def render_auth_page():
         try:
             st.login("google")
         except Exception:
-            st.error("Google Sign-In is not configured. Use Guest mode or add OAuth credentials in Streamlit secrets.")
+            st.error(
+                "Google Sign-In is not configured. Use Guest mode or add OAuth credentials in Streamlit secrets."
+            )
     if st.button("👤  Continue as Guest", use_container_width=True):
         st.session_state["_guest_mode"] = True
         st.rerun()
