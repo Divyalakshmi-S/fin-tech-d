@@ -4342,12 +4342,10 @@ def _gold_buyday_path():
 
 def _load_buyday_history():
     """Load gold buy-day prediction history from DB or JSON."""
-    try:
-        import db as _db
+    import db as _db
 
+    if _db.is_db_available():
         return _db.load_predictions("gold_buyday_predictions")
-    except Exception:
-        pass
     import os
 
     path = _gold_buyday_path()
@@ -4362,13 +4360,11 @@ def _load_buyday_history():
 
 def _save_buyday_history(history):
     """Save gold buy-day prediction history to DB or JSON."""
-    try:
-        import db as _db
+    import db as _db
 
+    if _db.is_db_available():
         _db.update_predictions("gold_buyday_predictions", history)
         return
-    except Exception:
-        pass
     import os
 
     path = _gold_buyday_path()
@@ -4840,9 +4836,15 @@ def save_gold_buyday_prediction(prediction):
     history = _load_buyday_history()
 
     # Don't duplicate same-month predictions (keep latest)
-    history = [h for h in history if h.get("month") != entry["month"]]
-    history.append(entry)
-    _save_buyday_history(history)
+    import db as _db
+
+    if _db.is_db_available():
+        # Use upsert on month key for DB
+        _db.save_prediction("gold_buyday_predictions", entry, unique_keys=["month"])
+    else:
+        history = [h for h in history if h.get("month") != entry["month"]]
+        history.append(entry)
+        _save_buyday_history(history)
     return entry
 
 
@@ -4959,9 +4961,9 @@ def _load_buyday_weights():
         "vix_shift": 1.0,
         "dxy_trend": 0.8,
     }
-    try:
-        import db as _db
+    import db as _db
 
+    if _db.is_db_available():
         saved = _db.load_predictions("gold_buyday_weights")
         if saved and isinstance(saved, list) and len(saved) == 1:
             saved = saved[0]
@@ -4970,8 +4972,7 @@ def _load_buyday_weights():
                 if key not in saved:
                     saved[key] = val
             return saved
-    except Exception:
-        pass
+        return default
     import os
 
     weights_path = os.path.join(
@@ -4992,13 +4993,11 @@ def _load_buyday_weights():
 
 def _save_buyday_weights(weights):
     """Save learned factor weights."""
-    try:
-        import db as _db
+    import db as _db
 
+    if _db.is_db_available():
         _db.update_predictions("gold_buyday_weights", [weights])
         return
-    except Exception:
-        pass
     import os
 
     weights_path = os.path.join(

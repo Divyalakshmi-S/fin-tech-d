@@ -23,6 +23,26 @@ _supabase_client = None
 _use_db = False
 
 
+def _is_deployed():
+    """Check if running in a deployed environment (Streamlit Cloud or GitHub Actions)."""
+    # GitHub Actions bot
+    if os.environ.get("GITHUB_ACTIONS"):
+        return True
+    # Supabase keys in env vars = deployed
+    if os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY"):
+        return True
+    # Check Streamlit secrets (Streamlit Cloud)
+    try:
+        import streamlit as st
+
+        secrets = st.secrets.get("supabase", {})
+        if secrets.get("SUPABASE_URL") and secrets.get("SUPABASE_KEY"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _get_client():
     """Lazy-init Supabase client. Returns None if not configured."""
     global _supabase_client, _use_db
@@ -30,13 +50,8 @@ def _get_client():
         return _supabase_client
 
     # Local dev: always use JSON/CSV — skip DB entirely
-    # DB is only used on Streamlit Cloud or in GitHub Actions (bot)
-    _is_cloud = os.environ.get("STREAMLIT_SHARING_MODE") or os.environ.get(
-        "STREAMLIT_SERVER_HEADLESS"
-    )
-    _is_bot = os.environ.get("GITHUB_ACTIONS")
-    if not _is_cloud and not _is_bot:
-        logger.info("Local environment detected — using JSON/CSV (skipping DB)")
+    if not _is_deployed():
+        logger.info("Local environment — using JSON/CSV (skipping DB)")
         _use_db = False
         return None
 
