@@ -203,7 +203,7 @@ def load_holdings(_user_id):
 holdings = load_holdings(user_id)
 
 # --- New user welcome banner ---
-if not holdings and page not in ("⚙️ Manage Portfolio", "📚 Learn", "🧮 Calculators"):
+if not holdings and page == "🏠 Overview":
     st.info(
         "👋 **Welcome!** You haven't added any holdings yet. "
         "Head to **⚙️ Manage Portfolio** in the sidebar to add your stocks and mutual funds."
