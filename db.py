@@ -28,18 +28,9 @@ def _is_deployed():
     # GitHub Actions bot
     if os.environ.get("GITHUB_ACTIONS"):
         return True
-    # Supabase keys in env vars = deployed
-    if os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY"):
+    # Streamlit Cloud always mounts code at /mount/src/
+    if os.path.exists("/mount/src"):
         return True
-    # Check Streamlit secrets (Streamlit Cloud)
-    try:
-        import streamlit as st
-
-        secrets = st.secrets.get("supabase", {})
-        if secrets.get("SUPABASE_URL") and secrets.get("SUPABASE_KEY"):
-            return True
-    except Exception:
-        pass
     return False
 
 
