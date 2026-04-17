@@ -1,8 +1,7 @@
-"""F2/F3/F4/F5/F14: Financial calculators — Retirement, Step-up SIP, Emergency Fund, Education, EMI."""
+"""F3/F5/F14: Financial calculators — Step-up SIP, Education Goal, Loan/EMI Impact."""
 
 import streamlit as st
 import pandas as pd
-import math
 from datetime import datetime
 
 
@@ -13,11 +12,6 @@ def _future_value_sip(monthly, rate_annual, years):
     if r <= 0:
         return monthly * n
     return monthly * (((1 + r) ** n - 1) / r) * (1 + r)
-
-
-def _future_value_lumpsum(principal, rate_annual, years):
-    """Future value of lumpsum."""
-    return principal * ((1 + rate_annual / 100) ** years)
 
 
 def _required_sip(target, rate_annual, years):
@@ -36,211 +30,53 @@ def _inflation_adjusted(amount, inflation_rate, years):
 
 def render(holdings):
     st.title("🧮 Financial Calculators")
-    st.caption("Plan your retirement, education, emergency fund, and more")
+    st.caption("Step-up SIP and loan impact analysis")
 
     calc_tabs = st.tabs(
         [
-            "🏖️ Retirement/FIRE",
             "📈 Step-up SIP",
-            "🆘 Emergency Fund",
-            "🎓 Education Goal",
             "💳 Loan/EMI Impact",
         ]
     )
 
     # =====================================================================
-    # F2: Retirement / FIRE Calculator
-    # =====================================================================
-    with calc_tabs[0]:
-        st.subheader("🏖️ Retirement / FIRE Calculator")
-        st.caption(
-            "How much do you need to retire? When can you be financially independent?"
-        )
-
-        rc1, rc2, rc3 = st.columns(3)
-        current_age = rc1.number_input(
-            "Current Age", min_value=18, max_value=70, value=30, key="ret_age"
-        )
-        retirement_age = rc2.number_input(
-            "Retirement Age",
-            min_value=current_age + 1,
-            max_value=80,
-            value=60,
-            key="ret_retire_age",
-        )
-        life_expectancy = rc3.number_input(
-            "Life Expectancy",
-            min_value=retirement_age + 1,
-            max_value=100,
-            value=85,
-            key="ret_life",
-        )
-
-        rc4, rc5, rc6 = st.columns(3)
-        monthly_expenses = rc4.number_input(
-            "Monthly Expenses (₹)",
-            min_value=5000,
-            step=5000,
-            value=50000,
-            key="ret_exp",
-        )
-        inflation_rate = rc5.number_input(
-            "Inflation Rate (%)",
-            min_value=1.0,
-            max_value=15.0,
-            value=6.0,
-            step=0.5,
-            key="ret_inf",
-        )
-        post_ret_return = rc6.number_input(
-            "Post-Retirement Return (%)",
-            min_value=1.0,
-            max_value=15.0,
-            value=7.0,
-            step=0.5,
-            key="ret_post_ret",
-        )
-
-        rc7, rc8, rc9 = st.columns(3)
-        current_savings = rc7.number_input(
-            "Current Savings/Investments (₹)",
-            min_value=0,
-            step=100000,
-            value=0,
-            key="ret_savings",
-        )
-        pre_ret_return = rc8.number_input(
-            "Pre-Retirement Return (%)",
-            min_value=1.0,
-            max_value=20.0,
-            value=12.0,
-            step=0.5,
-            key="ret_pre_ret",
-        )
-        monthly_sip = rc9.number_input(
-            "Current Monthly SIP (₹)",
-            min_value=0,
-            step=5000,
-            value=20000,
-            key="ret_sip",
-        )
-
-        years_to_retire = retirement_age - current_age
-        years_in_retirement = life_expectancy - retirement_age
-
-        # Future monthly expenses at retirement
-        future_monthly_exp = _inflation_adjusted(
-            monthly_expenses, inflation_rate, years_to_retire
-        )
-        future_annual_exp = future_monthly_exp * 12
-
-        # Corpus needed using 4% rule adjusted for Indian inflation
-        real_return = (
-            (1 + post_ret_return / 100) / (1 + inflation_rate / 100) - 1
-        ) * 100
-        if real_return > 0:
-            corpus_needed = future_annual_exp * (
-                (1 - (1 + real_return / 100) ** (-years_in_retirement))
-                / (real_return / 100)
-            )
-        else:
-            corpus_needed = future_annual_exp * years_in_retirement
-
-        # Current trajectory
-        future_savings = _future_value_lumpsum(
-            current_savings, pre_ret_return, years_to_retire
-        )
-        future_sip_value = _future_value_sip(
-            monthly_sip, pre_ret_return, years_to_retire
-        )
-        projected_corpus = future_savings + future_sip_value
-
-        shortfall = max(corpus_needed - projected_corpus, 0)
-        surplus = max(projected_corpus - corpus_needed, 0)
-
-        st.divider()
-
-        # Results
-        corpus_color = "#27ae60" if projected_corpus >= corpus_needed else "#e74c3c"
-        st.markdown(
-            f"""<div style="background: linear-gradient(135deg, {corpus_color}22, {corpus_color}11);
-            border-left: 5px solid {corpus_color}; border-radius: 10px; padding: 20px; margin: 10px 0;">
-            <h3 style="margin:0;">🏖️ Retirement Corpus Needed: ₹{corpus_needed:,.0f}</h3>
-            <p style="font-size: 1.1em; margin: 8px 0;">Your projected corpus: <strong style="color: {corpus_color};">₹{projected_corpus:,.0f}</strong></p>
-            <p style="margin: 0; opacity: 0.8;">Monthly expenses at retirement: ₹{future_monthly_exp:,.0f}/month (today's ₹{monthly_expenses:,.0f} after {inflation_rate}% inflation)</p>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-        rr1, rr2, rr3, rr4 = st.columns(4)
-        rr1.metric("Years to Retire", f"{years_to_retire}")
-        rr2.metric("Corpus Needed", f"₹{corpus_needed / 10000000:.2f} Cr")
-        rr3.metric("Projected Corpus", f"₹{projected_corpus / 10000000:.2f} Cr")
-        if shortfall > 0:
-            rr4.metric("Shortfall", f"₹{shortfall:,.0f}")
-        else:
-            rr4.metric("Surplus", f"₹{surplus:,.0f}")
-
-        if shortfall > 0:
-            extra_sip = _required_sip(shortfall, pre_ret_return, years_to_retire)
-            st.warning(
-                f"⚠️ You need an additional **₹{extra_sip:,.0f}/month** SIP to bridge the gap. "
-                f"Total required: ₹{monthly_sip + extra_sip:,.0f}/month."
-            )
-        else:
-            st.success(
-                f"✅ You're on track for retirement! You can even retire "
-                f"**{max(0, years_to_retire - int(surplus / future_annual_exp)):.0f} years earlier** if you maintain this pace."
-            )
-
-        # FIRE number
-        st.divider()
-        st.markdown("##### 🔥 FIRE Number (Financial Independence)")
-        fire_number = monthly_expenses * 12 * 25  # 4% rule on today's expenses
-        fire_inflation_adjusted = _inflation_adjusted(
-            fire_number, inflation_rate, years_to_retire
-        )
-        st.metric("FIRE Corpus (25x annual expenses)", f"₹{fire_number:,.0f}")
-        st.caption(
-            f"Inflation-adjusted FIRE corpus at age {retirement_age}: ₹{fire_inflation_adjusted:,.0f}"
-        )
-
-        # Growth projection chart
-        st.divider()
-        st.markdown("##### 📊 Corpus Growth Projection")
-        years_range = list(range(1, years_to_retire + 1))
-        corpus_series = []
-        for y in years_range:
-            fv_save = _future_value_lumpsum(current_savings, pre_ret_return, y)
-            fv_sip = _future_value_sip(monthly_sip, pre_ret_return, y)
-            corpus_series.append(fv_save + fv_sip)
-
-        chart_df = pd.DataFrame(
-            {
-                "Your Corpus": corpus_series,
-                "Target Corpus": [corpus_needed] * len(years_range),
-            },
-            index=[f"Age {current_age + y}" for y in years_range],
-        )
-
-        # Show only every few years for cleaner chart
-        step = max(1, len(years_range) // 15)
-        st.line_chart(chart_df.iloc[::step], height=300)
-
-    # =====================================================================
     # F3: Step-up SIP Calculator
     # =====================================================================
-    with calc_tabs[1]:
+    # --- Pre-compute portfolio context once ---
+    active_sips = [h for h in (holdings or []) if h.get("sip_monthly", 0) > 0]
+    total_sip_monthly = sum(h["sip_monthly"] for h in active_sips)
+    total_invested = sum(h.get("amount", 0) for h in (holdings or []))
+    mf_holdings = [h for h in (holdings or []) if h.get("type") == "mutual_fund"]
+    stock_holdings = [h for h in (holdings or []) if h.get("type") == "stock"]
+
+    with calc_tabs[0]:
         st.subheader("📈 Step-up SIP Calculator")
         st.caption("See how increasing your SIP annually creates massive wealth")
+
+        # Show current SIP context from portfolio
+        if active_sips:
+            with st.expander(
+                f"📋 Your current SIPs: {len(active_sips)} active · ₹{total_sip_monthly:,.0f}/month",
+                expanded=False,
+            ):
+                for h in active_sips:
+                    st.caption(
+                        f"• **{h['name']}** — ₹{h['sip_monthly']:,.0f}/mo ({h.get('type', 'stock')})"
+                    )
+            st.caption(
+                f"💡 Your current total SIP is ₹{total_sip_monthly:,.0f}/mo. Use it as your starting base below."
+            )
 
         su1, su2, su3 = st.columns(3)
         base_sip = su1.number_input(
             "Starting Monthly SIP (₹)",
             min_value=500,
             step=1000,
-            value=10000,
+            value=max(int(total_sip_monthly), 500) if total_sip_monthly > 0 else 10000,
             key="su_sip",
+            help=(
+                "Pre-filled from your portfolio SIPs" if total_sip_monthly > 0 else None
+            ),
         )
         annual_increase = su2.number_input(
             "Annual Increase (%)", min_value=0, max_value=50, value=10, key="su_inc"
@@ -327,221 +163,22 @@ def render(holdings):
             f"you invest ₹{extra_invested:,.0f} more but earn ₹{extra_wealth - extra_invested:,.0f} extra in returns!"
         )
 
-    # =====================================================================
-    # F4: Emergency Fund Advisor
-    # =====================================================================
-    with calc_tabs[2]:
-        st.subheader("🆘 Emergency Fund Advisor")
-        st.caption("Calculate your emergency fund requirement and track progress")
-
-        ef1, ef2 = st.columns(2)
-        ef_monthly_expenses = ef1.number_input(
-            "Monthly Expenses (₹)", min_value=5000, step=5000, value=40000, key="ef_exp"
-        )
-        ef_months = ef2.number_input(
-            "Emergency Fund (months)",
-            min_value=3,
-            max_value=12,
-            value=6,
-            key="ef_months",
-            help="6 months is recommended, 9-12 if single income",
-        )
-
-        ef_target = ef_monthly_expenses * ef_months
-
-        st.divider()
-
-        ef3, ef4 = st.columns(2)
-        ef_current_liquid = ef3.number_input(
-            "Current Liquid Savings (₹)",
-            min_value=0,
-            step=10000,
-            value=0,
-            key="ef_liquid",
-            help="Bank balance + liquid fund + FD that can be broken",
-        )
-        ef_monthly_save = ef4.number_input(
-            "Monthly Savings Towards EF (₹)",
-            min_value=0,
-            step=2000,
-            value=5000,
-            key="ef_save",
-        )
-
-        ef_gap = max(ef_target - ef_current_liquid, 0)
-        ef_progress = (
-            min((ef_current_liquid / ef_target) * 100, 100) if ef_target > 0 else 0
-        )
-        ef_months_to_fill = (
-            math.ceil(ef_gap / ef_monthly_save) if ef_monthly_save > 0 else float("inf")
-        )
-
-        ef_color = (
-            "#27ae60"
-            if ef_progress >= 100
-            else "#f39c12" if ef_progress >= 50 else "#e74c3c"
-        )
-
-        st.markdown(
-            f"""<div style="background: linear-gradient(135deg, {ef_color}22, {ef_color}11);
-            border-left: 5px solid {ef_color}; border-radius: 10px; padding: 20px; margin: 10px 0;">
-            <h3 style="margin:0; color: {ef_color};">🆘 Emergency Fund: {ef_progress:.0f}% funded</h3>
-            <p style="margin: 8px 0;">Target: ₹{ef_target:,.0f} ({ef_months} months × ₹{ef_monthly_expenses:,.0f})</p>
-            <p style="margin: 0;">Current: ₹{ef_current_liquid:,.0f} · Gap: ₹{ef_gap:,.0f}</p>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-        # Progress bar
-        st.markdown(
-            f"""<div style="background: #eee; border-radius: 8px; height: 20px; margin: 10px 0;">
-            <div style="background: {ef_color}; width: {ef_progress}%; height: 20px; border-radius: 8px;
-            text-align: center; color: white; font-size: 0.8em; line-height: 20px;">{ef_progress:.0f}%</div>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-        if ef_gap > 0 and ef_monthly_save > 0:
-            st.info(
-                f"⏰ At ₹{ef_monthly_save:,.0f}/month, your emergency fund will be full in **{ef_months_to_fill} months**."
-            )
-        elif ef_gap > 0:
-            st.warning("⚠️ Set aside a monthly amount to build your emergency fund.")
-        else:
-            st.success("✅ Emergency fund fully funded! Great job!")
-
-        st.divider()
-        st.markdown("##### 💡 Where to park your Emergency Fund")
-        st.markdown(
-            """
-| Option | Returns | Liquidity | Best For |
-|---|---|---|---|
-| **Savings Account** | 3-4% | Instant | 1 month expenses |
-| **Liquid Mutual Fund** | 5-7% | T+1 | 2-3 months expenses |
-| **Short-term FD** | 6-7% | 1-2 days | Remaining amount |
-| **Sweep-in FD** | 6-7% | Instant | All-in-one option |
-"""
-        )
-
-    # =====================================================================
-    # F5: Children's Education Goal
-    # =====================================================================
-    with calc_tabs[3]:
-        st.subheader("🎓 Children's Education Goal Planner")
-        st.caption("Plan for education costs with education-specific inflation")
-
-        ed1, ed2, ed3 = st.columns(3)
-        child_age = ed1.number_input(
-            "Child's Current Age", min_value=0, max_value=17, value=5, key="ed_age"
-        )
-        target_age = ed2.number_input(
-            "Education Start Age",
-            min_value=child_age + 1,
-            max_value=25,
-            value=18,
-            key="ed_target_age",
-        )
-        education_type = ed3.selectbox(
-            "Education Type",
-            [
-                "Engineering (India)",
-                "Medical (India)",
-                "MBA (India)",
-                "Engineering (Abroad)",
-                "Medical (Abroad)",
-                "MBA (Abroad)",
-                "Custom Amount",
-            ],
-            key="ed_type",
-        )
-
-        # Pre-set costs (2024 estimates)
-        cost_map = {
-            "Engineering (India)": 1500000,
-            "Medical (India)": 5000000,
-            "MBA (India)": 2500000,
-            "Engineering (Abroad)": 5000000,
-            "Medical (Abroad)": 10000000,
-            "MBA (Abroad)": 8000000,
-            "Custom Amount": 0,
-        }
-
-        today_cost = cost_map.get(education_type, 0)
-        if education_type == "Custom Amount":
-            today_cost = st.number_input(
-                "Total Education Cost Today (₹)",
-                min_value=100000,
-                step=100000,
-                value=2000000,
-                key="ed_custom",
-            )
-
-        ed_inflation = st.number_input(
-            "Education Inflation (%)",
-            min_value=3.0,
-            max_value=15.0,
-            value=8.0,
-            step=0.5,
-            key="ed_inf",
-            help="Education costs typically inflate at 8-10% in India",
-        )
-        ed_return = st.number_input(
-            "Expected Investment Return (%)",
-            min_value=4.0,
-            max_value=20.0,
-            value=12.0,
-            step=0.5,
-            key="ed_ret",
-        )
-
-        years_to_goal = target_age - child_age
-        future_cost = _inflation_adjusted(today_cost, ed_inflation, years_to_goal)
-        monthly_sip_needed = _required_sip(future_cost, ed_return, years_to_goal)
-
-        st.divider()
-
-        st.markdown(
-            f"""<div style="background: linear-gradient(135deg, #3498db22, #3498db11);
-            border-left: 5px solid #3498db; border-radius: 10px; padding: 20px; margin: 10px 0;">
-            <h3 style="margin:0; color: #3498db;">🎓 Education Cost in {years_to_goal} years: ₹{future_cost:,.0f}</h3>
-            <p style="margin: 8px 0;">Today's cost: ₹{today_cost:,.0f} → After {ed_inflation}% education inflation</p>
-            <p style="margin: 0;">Monthly SIP needed: <strong>₹{monthly_sip_needed:,.0f}</strong></p>
-            </div>""",
-            unsafe_allow_html=True,
-        )
-
-        ed_r1, ed_r2, ed_r3 = st.columns(3)
-        ed_r1.metric("Today's Cost", f"₹{today_cost:,.0f}")
-        ed_r2.metric("Future Cost", f"₹{future_cost:,.0f}")
-        ed_r3.metric("Monthly SIP", f"₹{monthly_sip_needed:,.0f}")
-
-        # Growth chart
-        years_list = list(range(1, years_to_goal + 1))
-        sip_growth = [
-            _future_value_sip(monthly_sip_needed, ed_return, y) for y in years_list
-        ]
-        cost_growth = [
-            _inflation_adjusted(today_cost, ed_inflation, y) for y in years_list
-        ]
-
-        chart_df = pd.DataFrame(
-            {
-                "Your Investment": sip_growth,
-                "Education Cost": cost_growth,
-            },
-            index=[f"Year {y}" for y in years_list],
-        )
-        st.line_chart(chart_df, height=300)
-
-        st.info(
-            f"💡 Start with ₹{monthly_sip_needed:,.0f}/mo SIP in equity mutual funds for {years_to_goal} years. "
-            f"Switch to debt funds 2-3 years before the goal when {years_to_goal - 3} years remain."
-        )
+        if active_sips:
+            gap = base_sip - total_sip_monthly
+            if gap > 0:
+                st.warning(
+                    f"⚠️ Your current SIPs total ₹{total_sip_monthly:,.0f}/mo but this plan uses ₹{base_sip:,.0f}/mo. "
+                    f"You need ₹{gap:,.0f}/mo more in SIPs to match."
+                )
+            elif gap == 0:
+                st.success(
+                    "✅ This matches your current SIP amount. Just add a 10% annual step-up!"
+                )
 
     # =====================================================================
     # F14: Loan/EMI Impact Calculator
     # =====================================================================
-    with calc_tabs[4]:
+    with calc_tabs[1]:
         st.subheader("💳 Loan/EMI Impact Calculator")
         st.caption(
             "See how taking a loan affects your investment capacity and goal timelines"
@@ -599,6 +236,31 @@ def render(holdings):
         lm2.metric("Total Interest", f"₹{total_interest:,.0f}")
         lm3.metric("Total Payment", f"₹{total_payment:,.0f}")
         lm4.metric("Interest/Principal", f"{total_interest / loan_amount * 100:.0f}%")
+
+        # Portfolio context for EMI impact
+        if total_sip_monthly > 0 or total_invested > 0:
+            st.divider()
+            st.markdown("##### 📋 Your Current Investment Context")
+            ctx1, ctx2, ctx3 = st.columns(3)
+            ctx1.metric("Monthly SIPs", f"₹{total_sip_monthly:,.0f}")
+            ctx2.metric("Portfolio Value", f"₹{total_invested:,.0f}")
+            emi_to_sip_pct = (
+                (emi / total_sip_monthly * 100) if total_sip_monthly > 0 else 0
+            )
+            ctx3.metric(
+                "EMI as % of SIPs",
+                f"{emi_to_sip_pct:.0f}%" if total_sip_monthly > 0 else "—",
+            )
+            if total_sip_monthly > 0 and emi > total_sip_monthly:
+                st.warning(
+                    f"⚠️ This EMI (₹{emi:,.0f}) is **{emi_to_sip_pct:.0f}%** of your total SIP (₹{total_sip_monthly:,.0f}). "
+                    f"Taking this loan may force you to stop or reduce existing SIPs."
+                )
+            elif total_sip_monthly > 0 and emi > total_sip_monthly * 0.5:
+                st.info(
+                    f"💡 This EMI would consume {emi_to_sip_pct:.0f}% of your monthly SIP budget. "
+                    f"Ensure you can maintain essential SIPs alongside."
+                )
 
         # Investment impact
         st.divider()

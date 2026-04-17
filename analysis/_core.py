@@ -60,6 +60,222 @@ TROY_OZ_GRAMS = 31.1035
 GOLD_PREMIUM = 1.03  # ~3% GST + making for Chennai retail
 SILVER_PREMIUM = 1.05  # ~5% premium for Chennai retail
 
+# ---------------------------------------------------------------------------
+# LiveChennai.com scraper — actual Chennai retail gold & silver rates
+# ---------------------------------------------------------------------------
+
+_chennai_rates_cache: dict = {}
+_CHENNAI_CACHE_TTL = 300  # 5 minutes
+
+
+def fetch_chennai_rates():
+    """Scrape livechennai.com for actual Chennai gold & silver rates.
+
+    Returns dict:
+        {
+            "gold_24k": float,      # ₹/gram today
+            "gold_22k": float,      # ₹/gram today
+            "gold_8g_24k": float,   # ₹/8gram today
+            "silver": float,        # ₹/gram today
+            "silver_kg": float,     # ₹/kg today
+            "gold_history": [       # last ~10 days
+                {"date": "17/Apr/2026", "gold_24k": 15502.0, "gold_22k": 14210.0},
+                ...
+            ],
+            "silver_history": [
+                {"date": "17/Apr/2026", "silver_gram": 275.0, "silver_kg": 275000.0},
+                ...
+            ],
+            "source": "livechennai",
+            "timestamp": datetime,
+        }
+    Returns None if scraping fails.
+    """
+    import time
+
+    # Check cache
+    now = time.time()
+    if (
+        _chennai_rates_cache.get("data")
+        and (now - _chennai_rates_cache.get("ts", 0)) < _CHENNAI_CACHE_TTL
+    ):
+        return _chennai_rates_cache["data"]
+
+    try:
+        import urllib.request
+        import re as _re_local
+
+        url = "https://www.livechennai.com/gold_silverrate.asp"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+
+        # --- Parse gold rates table ---
+        # HTML structure: <td class="date-col">DD/Mon/YYYY</td>
+        #   <td ...><i class="fa fa-inr"></i> 15,502</td> × 4 columns
+        gold_pattern = _re_local.compile(
+            r'<td[^>]*class="date-col"[^>]*>\s*(\d{2}/\w{3}/\d{4})\s*</td>\s*'
+            r"<td[^>]*>[^<]*(?:<[^>]+>)*\s*([\d,]+)\s*</td>\s*"
+            r"<td[^>]*>[^<]*(?:<[^>]+>)*\s*([\d,]+)\s*</td>\s*"
+            r"<td[^>]*>[^<]*(?:<[^>]+>)*\s*([\d,]+)\s*</td>\s*"
+            r"<td[^>]*>[^<]*(?:<[^>]+>)*\s*([\d,]+)\s*</td>",
+            _re_local.IGNORECASE,
+        )
+        # --- Parse gold table: find rows ONLY after "Pure Gold" header ---
+        gold_marker = html.find("Pure Gold")
+        if gold_marker < 0:
+            return None
+        gold_html = html[gold_marker:]
+        gold_rows = gold_pattern.findall(gold_html)
+
+        # --- Parse silver rates table ---
+        # HTML structure: <td class="date-col">DD/Mon/YYYY</td>
+        #   <td ...><i class="fa fa-inr"></i> 275.00</td> × 2 columns
+        silver_pattern = _re_local.compile(
+            r'<td[^>]*class="date-col"[^>]*>\s*(\d{2}/\w{3}/\d{4})\s*</td>\s*'
+            r"<td[^>]*>[^<]*(?:<[^>]+>)*\s*([\d,.]+)\s*</td>\s*"
+            r"<td[^>]*>[^<]*(?:<[^>]+>)*\s*([\d,.]+)\s*</td>",
+            _re_local.IGNORECASE,
+        )
+        # Silver table comes after "Chennai Silver Rate" in the page
+        silver_marker = html.find("Chennai Silver Rate")
+        if silver_marker < 0:
+            silver_marker = html.find("Silver Rate")
+        silver_rows = []
+        if silver_marker > 0:
+            silver_html = html[silver_marker:]
+            silver_rows = silver_pattern.findall(silver_html)
+
+        if not gold_rows:
+            return None
+
+        def _parse_num(s):
+            return float(s.replace(",", "").strip())
+
+        # Build gold history
+        gold_history = []
+        for row in gold_rows:
+            try:
+                gold_history.append(
+                    {
+                        "date": row[0],
+                        "gold_24k": _parse_num(row[1]),
+                        "gold_8g_24k": _parse_num(row[2]),
+                        "gold_22k": _parse_num(row[3]),
+                        "gold_8g_22k": _parse_num(row[4]),
+                    }
+                )
+            except (ValueError, IndexError):
+                continue
+
+        # Build silver history
+        silver_history = []
+        for row in silver_rows:
+            try:
+                silver_history.append(
+                    {
+                        "date": row[0],
+                        "silver_gram": _parse_num(row[1]),
+                        "silver_kg": _parse_num(row[2]),
+                    }
+                )
+            except (ValueError, IndexError):
+                continue
+
+        if not gold_history:
+            return None
+
+        today = gold_history[0]
+        result = {
+            "gold_24k": today["gold_24k"],
+            "gold_22k": today["gold_22k"],
+            "gold_8g_24k": today["gold_8g_24k"],
+            "silver": silver_history[0]["silver_gram"] if silver_history else None,
+            "silver_kg": silver_history[0]["silver_kg"] if silver_history else None,
+            "gold_history": gold_history,
+            "silver_history": silver_history,
+            "source": "livechennai",
+            "timestamp": datetime.now(),
+        }
+
+        _chennai_rates_cache["data"] = result
+        _chennai_rates_cache["ts"] = now
+        return result
+
+    except Exception:
+        return None
+
+
+def get_gold_calibration_factor():
+    """Compute ratio: actual Chennai rate / GC=F-derived rate.
+
+    Used to calibrate yfinance-derived time series so chart prices
+    align with real Chennai retail rates.  Returns (factor, actual_price)
+    or (1.0, None) on failure.
+    """
+    chennai = fetch_chennai_rates()
+    if not chennai or not chennai.get("gold_24k"):
+        return 1.0, None
+
+    actual = chennai["gold_24k"]
+
+    try:
+        ticker = yf.Ticker("GC=F")
+        fx_t = yf.Ticker("USDINR=X")
+        m_hist = ticker.history(period="5d")
+        f_hist = fx_t.history(period="5d")
+        if m_hist.empty or f_hist.empty:
+            return 1.0, actual
+
+        gold_usd = float(m_hist["Close"].iloc[-1])
+        rate = float(f_hist["Close"].iloc[-1])
+        computed = (gold_usd * rate) / TROY_OZ_GRAMS
+
+        if computed > 0:
+            return actual / computed, actual
+        return 1.0, actual
+    except Exception:
+        return 1.0, actual
+
+
+def get_silver_calibration_factor():
+    """Compute ratio: actual Chennai silver rate / SI=F-derived rate.
+
+    Returns (factor, actual_price) or (1.0, None) on failure.
+    """
+    chennai = fetch_chennai_rates()
+    if not chennai or not chennai.get("silver"):
+        return 1.0, None
+
+    actual = chennai["silver"]
+
+    try:
+        ticker = yf.Ticker("SI=F")
+        fx_t = yf.Ticker("USDINR=X")
+        m_hist = ticker.history(period="5d")
+        f_hist = fx_t.history(period="5d")
+        if m_hist.empty or f_hist.empty:
+            return 1.0, actual
+
+        silver_usd = float(m_hist["Close"].iloc[-1])
+        rate = float(f_hist["Close"].iloc[-1])
+        computed = (silver_usd * rate) / TROY_OZ_GRAMS
+
+        if computed > 0:
+            return actual / computed, actual
+        return 1.0, actual
+    except Exception:
+        return 1.0, actual
+
 
 # ---------------------------------------------------------------------------
 # Consolidated metal price helpers (single source of truth)
@@ -71,6 +287,9 @@ def metal_price_inr(
 ) -> float | None:
     """Fetch metal price in INR/gram.
 
+    Primary source: livechennai.com (actual Chennai retail rates).
+    Fallback: Yahoo Finance futures × USD/INR conversion.
+
     Args:
         ticker: Yahoo Finance metal futures ticker (GC=F for gold, SI=F for silver)
         premium: multiplier for GST+making. Defaults by ticker.
@@ -80,6 +299,42 @@ def metal_price_inr(
     """
     if premium is None:
         premium = GOLD_PREMIUM if "GC" in ticker else SILVER_PREMIUM
+
+    # --- Try Chennai actual rates first ---
+    chennai = fetch_chennai_rates()
+    if chennai:
+        if "GC" in ticker and chennai.get("gold_24k"):
+            current = chennai["gold_24k"]
+            change_pct = None
+            hist = chennai.get("gold_history", [])
+            if len(hist) >= 2:
+                prev = hist[1]["gold_24k"]
+                if prev > 0:
+                    change_pct = round(((current - prev) / prev) * 100, 2)
+            return {
+                "per_gram": current,
+                "per_8gram": round(current * 8, 2),
+                "per_100gram": round(current * 100, 2),
+                "per_kg": round(current * 1000, 2),
+                "change_pct": change_pct,
+            }
+        if "SI" in ticker and chennai.get("silver"):
+            current = chennai["silver"]
+            change_pct = None
+            hist = chennai.get("silver_history", [])
+            if len(hist) >= 2:
+                prev = hist[1]["silver_gram"]
+                if prev > 0:
+                    change_pct = round(((current - prev) / prev) * 100, 2)
+            return {
+                "per_gram": current,
+                "per_8gram": round(current * 8, 2),
+                "per_100gram": round(current * 100, 2),
+                "per_kg": chennai.get("silver_kg", round(current * 1000, 2)),
+                "change_pct": change_pct,
+            }
+
+    # --- Fallback: Yahoo Finance calculation ---
     try:
         metal = yf.Ticker(ticker)
         fx = yf.Ticker("USDINR=X")
@@ -1924,12 +2179,18 @@ def save_goal(goal, user_id=None):
     except ImportError:
         pass
 
-    goals_path = os.path.join(os.path.dirname(__file__), "data", "goals.json")
-    goals = load_goals()
+    try:
+        import db as _db
+
+        goals_path = _db._json_path("goals.json", user_id=user_id)
+    except ImportError:
+        goals_path = os.path.join(os.path.dirname(__file__), "..", "data", "goals.json")
+    goals = load_goals(user_id=user_id)
     goal["id"] = max((g.get("id", 0) for g in goals), default=0) + 1
     if "created_date" not in goal:
         goal["created_date"] = datetime.now().strftime("%Y-%m-%d")
     goals.append(goal)
+    os.makedirs(os.path.dirname(goals_path), exist_ok=True)
     tmp_path = goals_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(goals, f, indent=2)
@@ -1949,7 +2210,12 @@ def load_goals(user_id=None):
     except ImportError:
         pass
 
-    goals_path = os.path.join(os.path.dirname(__file__), "data", "goals.json")
+    try:
+        import db as _db
+
+        goals_path = _db._json_path("goals.json", user_id=user_id)
+    except ImportError:
+        goals_path = os.path.join(os.path.dirname(__file__), "..", "data", "goals.json")
     try:
         with open(goals_path, encoding="utf-8") as f:
             return json.load(f)
@@ -1970,9 +2236,15 @@ def delete_goal(goal_id, user_id=None):
     except ImportError:
         pass
 
-    goals_path = os.path.join(os.path.dirname(__file__), "data", "goals.json")
-    goals = load_goals()
+    try:
+        import db as _db
+
+        goals_path = _db._json_path("goals.json", user_id=user_id)
+    except ImportError:
+        goals_path = os.path.join(os.path.dirname(__file__), "..", "data", "goals.json")
+    goals = load_goals(user_id=user_id)
     goals = [g for g in goals if g.get("id") != goal_id]
+    os.makedirs(os.path.dirname(goals_path), exist_ok=True)
     tmp_path = goals_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(goals, f, indent=2)
@@ -3235,8 +3507,12 @@ def scan_sector_performance():
 # ---------------------------------------------------------------------------
 
 
-def _gold_inr_series(gold_hist, fx_hist, premium=1.03):
-    """Combine gold futures + FX into INR/gram series, handling timezone mismatches."""
+def _gold_inr_series(gold_hist, fx_hist, premium=1.03, calibrate=True):
+    """Combine gold futures + FX into INR/gram series, handling timezone mismatches.
+
+    If calibrate=True, adjusts the entire series so the latest value matches
+    the actual Chennai retail rate from livechennai.com.
+    """
     import pandas as pd
 
     g = gold_hist["Close"].copy()
@@ -3246,7 +3522,18 @@ def _gold_inr_series(gold_hist, fx_hist, premium=1.03):
     df = pd.DataFrame({"gold": g, "fx": f}).ffill().dropna()
     if df.empty:
         return None
-    return (df["gold"] * df["fx"]) / 31.1035 * premium
+    series = (df["gold"] * df["fx"]) / TROY_OZ_GRAMS * premium
+
+    if calibrate:
+        if "GC" in str(gold_hist.columns.tolist()) or premium <= 1.04:
+            factor, _ = get_gold_calibration_factor()
+        else:
+            factor, _ = get_silver_calibration_factor()
+        # Replace the static premium with the real calibration
+        if factor != 1.0:
+            # Undo the premium and apply actual factor
+            series = series / premium * factor
+    return series
 
 
 def analyze_gold_trend():
@@ -4111,7 +4398,9 @@ def save_gold_prediction(prediction):
     except ImportError:
         pass
 
-    log_path = os.path.join(os.path.dirname(__file__), "data", "gold_predictions.json")
+    log_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", "gold_predictions.json"
+    )
 
     # Load existing predictions
     predictions = []
@@ -4133,6 +4422,1138 @@ def save_gold_prediction(prediction):
     os.replace(tmp_path, log_path)
 
     return entry
+
+
+# ---------------------------------------------------------------------------
+# GOLD BUY-DAY PREDICTION — best day of the month to buy gold
+# ---------------------------------------------------------------------------
+
+
+def _gold_buyday_path():
+    import os
+
+    return os.path.join(
+        os.path.dirname(__file__), "..", "data", "gold_buyday_predictions.json"
+    )
+
+
+def _load_buyday_history():
+    """Load gold buy-day prediction history from JSON."""
+    import os
+
+    path = _gold_buyday_path()
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_buyday_history(history):
+    """Save gold buy-day prediction history to JSON."""
+    import os
+
+    path = _gold_buyday_path()
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(history, f, indent=2, default=str)
+    os.replace(tmp, path)
+
+
+def _fetch_gold_news_headlines(max_items=20):
+    """Fetch recent gold price news headlines from Google News RSS.
+
+    Returns list of dicts: [{title, published, source}, ...]
+    """
+    try:
+        feed = feedparser.parse(
+            "https://news.google.com/rss/search?q=gold+price+india&hl=en-IN"
+        )
+        results = []
+        for e in feed.entries[:max_items]:
+            results.append(
+                {
+                    "title": e.get("title", ""),
+                    "published": e.get("published", ""),
+                    "source": e.get("source", {}).get("title", ""),
+                }
+            )
+        return results
+    except Exception:
+        return []
+
+
+def _detect_event_keywords(headlines):
+    """Scan headlines for macro events that disrupt gold patterns.
+
+    Returns list of detected event types (e.g. 'fed', 'cpi', 'tariff', 'war').
+    """
+    event_keywords = {
+        "fed": ["fed", "federal reserve", "fomc", "rate cut", "rate hike", "powell"],
+        "cpi": ["cpi", "inflation data", "consumer price"],
+        "tariff": ["tariff", "trade war", "import duty", "customs duty"],
+        "geopolitical": [
+            "war",
+            "conflict",
+            "sanctions",
+            "missile",
+            "attack",
+            "tension",
+        ],
+        "demand": [
+            "akshaya tritiya",
+            "dhanteras",
+            "diwali",
+            "wedding season",
+            "festive",
+            "gold demand",
+        ],
+        "central_bank": ["rbi", "central bank", "gold reserve", "gold buying"],
+    }
+    detected = set()
+    for h in headlines:
+        title_lower = h.get("title", "").lower()
+        for event_type, keywords in event_keywords.items():
+            if any(kw in title_lower for kw in keywords):
+                detected.add(event_type)
+    return sorted(detected)
+
+
+def predict_gold_buy_day():
+    """Predict the best day of the month to buy gold based on historical patterns.
+
+    Analyzes 3 years of gold price data plus macro indicators. Uses 10 factors:
+      **Core pattern factors:**
+      1. Within-month percentile rank (trend-neutral)
+      2. Avg % from monthly low
+      3. Win rate — how often day X is in cheapest 25%
+      4. Recent %-from-low (last 6 months)
+      5. Recent win rate (last 6 months)
+      6. Avg price rank (legacy tiebreaker)
+      **Macro-aware factors:**
+      7. Day-of-week bias — Monday historically cheapest, Wed/Fri expensive
+      8. Volatility regime — high-vol months shift optimal days
+      9. VIX regime — fear index shifts which days are cheapest
+      10. DXY trend — dollar direction affects early vs late month bias
+
+    Also fetches gold news headlines for event risk context.
+
+    Returns dict:
+      - best_days: list of top 3 recommended days (sorted by score)
+      - analysis: per-day stats
+      - confidence: 0-100
+      - reasoning: list of explanations
+      - month: current month string
+      - current_price: current gold price
+      - news_events: detected macro events from news
+      - vol_regime: current volatility regime (low/mid/high)
+    """
+    try:
+        gold = yf.Ticker("GC=F")
+        usd_inr = yf.Ticker("USDINR=X")
+
+        gold_hist = gold.history(period="3y")
+        fx_hist = usd_inr.history(period="3y")
+
+        if gold_hist.empty or fx_hist.empty:
+            return None
+
+        inr_series = _gold_inr_series(gold_hist, fx_hist)
+        if inr_series is None or len(inr_series) < 200:
+            return None
+
+        import pandas as pd
+        import calendar
+
+        df = pd.DataFrame({"price": inr_series})
+        df["day"] = df.index.day
+        df["dow"] = df.index.dayofweek  # 0=Mon ... 4=Fri
+        df["month"] = df.index.to_period("M")
+
+        # --- Factor 1 (legacy, low weight): Avg price rank per day-of-month ---
+        day_avg = df.groupby("day")["price"].mean()
+        avg_rank = day_avg.rank()
+
+        # --- Factor 2: Avg % from monthly low ---
+        month_stats = df.groupby("month")["price"].agg(["min", "max"])
+        df = df.join(month_stats, on="month")
+        df["pct_from_low"] = ((df["price"] - df["min"]) / (df["max"] - df["min"])) * 100
+        day_pct_from_low = df.groupby("day")["pct_from_low"].mean()
+        pct_rank = day_pct_from_low.rank()
+
+        # --- Factor 3: Win rate — how often in bottom 25% of month ---
+        df["in_bottom_25"] = df["pct_from_low"] <= 25
+        day_win_rate = df.groupby("day")["in_bottom_25"].mean() * 100
+        win_rank = day_win_rate.rank(ascending=False)
+
+        # --- Factor 4: Within-month percentile rank (trend-neutral) ---
+        df["month_rank"] = df.groupby("month")["price"].rank(pct=True) * 100
+        day_month_rank = df.groupby("day")["month_rank"].mean()
+        month_rank_rank = day_month_rank.rank()
+
+        # --- Factor 5 & 6: Recency-weighted (last 6 months) ---
+        current_period = pd.Period(datetime.now(), freq="M")
+        recent_cutoff = current_period - 6
+        df_recent = df[df["month"] >= recent_cutoff]
+
+        if not df_recent.empty and len(df_recent) >= 30:
+            recent_pct = df_recent.groupby("day")["pct_from_low"].mean()
+            recent_pct_rank = recent_pct.rank()
+            df_recent_c = df_recent.copy()
+            df_recent_c["in_bottom_25"] = df_recent_c["pct_from_low"] <= 25
+            recent_win = df_recent_c.groupby("day")["in_bottom_25"].mean() * 100
+            recent_win_rank = recent_win.rank(ascending=False)
+        else:
+            recent_pct_rank = pd.Series(dtype=float)
+            recent_win_rank = pd.Series(dtype=float)
+
+        # --- Factor 7: Day-of-week bias ---
+        # Mon=27.6% win, Tue=24.9%, Thu=26.3%, Wed=21.5%, Fri=23.5%
+        dow_win = df.groupby("dow")["in_bottom_25"].mean() * 100
+        dow_avg = dow_win.mean()
+        # Bonus/penalty per weekday (positive = cheaper than average)
+        dow_bonus = {dow: (rate - dow_avg) for dow, rate in dow_win.items()}
+
+        # Map each day-of-month in the CURRENT month to its weekday
+        now = datetime.now()
+        current_year, current_month_num = now.year, now.month
+        _, days_in_month = calendar.monthrange(current_year, current_month_num)
+        day_to_dow = {}
+        for d in range(1, days_in_month + 1):
+            try:
+                dt = date(current_year, current_month_num, d)
+                day_to_dow[d] = dt.weekday()
+            except ValueError:
+                pass
+
+        # --- Factor 8: Volatility regime ---
+        # Calculate recent 3-month average intra-month volatility
+        recent_3m = current_period - 3
+        recent_months = df[df["month"] >= recent_3m]
+        month_vols = recent_months.groupby("month").apply(
+            lambda g: (
+                ((g["price"].max() - g["price"].min()) / g["price"].min()) * 100
+                if len(g) > 1
+                else 0
+            )
+        )
+        avg_vol = month_vols.mean() if not month_vols.empty else 5.0
+        if avg_vol < 5:
+            vol_regime = "low"
+            vol_confidence_adj = 0
+        elif avg_vol < 10:
+            vol_regime = "mid"
+            vol_confidence_adj = -10
+        else:
+            vol_regime = "high"
+            vol_confidence_adj = -20
+
+        # Continuous vol factor: higher vol → more penalty for extreme days
+        # Scale: 0 at vol=3%, 1.0 at vol=10%, capped at 1.5
+        vol_intensity = min(1.5, max(0, (avg_vol - 3) / 7))
+
+        # --- Factor 9: VIX level (continuous) ---
+        try:
+            vix_data = yf.Ticker("^VIX").history(period="1mo")
+            current_vix = vix_data["Close"].iloc[-1] if not vix_data.empty else 20
+        except Exception:
+            current_vix = 20
+
+        if current_vix > 25:
+            vix_regime = "high"
+        elif current_vix < 15:
+            vix_regime = "low"
+        else:
+            vix_regime = "normal"
+
+        # Continuous VIX factor: distance from "calm" baseline of 18
+        # Positive = elevated fear, negative = very calm
+        vix_intensity = (current_vix - 18) / 10  # e.g., VIX=28 → +1.0, VIX=13 → -0.5
+
+        # VIX-conditioned win rates: compute win rate by day-of-month separately
+        # for high-VIX and low-VIX periods in training data
+        df_vix_join = df.copy()
+        try:
+            vix_series = yf.Ticker("^VIX").history(period="3y")["Close"]
+            vix_series.index = vix_series.index.tz_localize(None)
+            df_vix_join = df_vix_join.join(
+                pd.DataFrame({"vix": vix_series}), how="left"
+            )
+            df_vix_join["vix"] = df_vix_join["vix"].ffill()
+        except Exception:
+            df_vix_join["vix"] = 20
+
+        # Split training data by VIX level
+        high_vix_train = df_vix_join[df_vix_join["vix"] > 22]
+        low_vix_train = df_vix_join[df_vix_join["vix"] <= 18]
+
+        if len(high_vix_train) > 30:
+            hv_win = high_vix_train.groupby("day")["in_bottom_25"].mean() * 100
+            hv_win_rank = hv_win.rank(ascending=False)
+        else:
+            hv_win_rank = pd.Series(dtype=float)
+        if len(low_vix_train) > 30:
+            lv_win = low_vix_train.groupby("day")["in_bottom_25"].mean() * 100
+            lv_win_rank = lv_win.rank(ascending=False)
+        else:
+            lv_win_rank = pd.Series(dtype=float)
+
+        # --- Factor 10: DXY trend (continuous) ---
+        try:
+            dxy_data = yf.Ticker("DX-Y.NYB").history(period="2mo")
+            if not dxy_data.empty and len(dxy_data) > 20:
+                dxy_prev = dxy_data["Close"].iloc[:20].mean()
+                dxy_now = dxy_data["Close"].iloc[-5:].mean()
+                dxy_change = ((dxy_now - dxy_prev) / dxy_prev) * 100
+            else:
+                dxy_change = 0
+        except Exception:
+            dxy_change = 0
+
+        if dxy_change > 0.5:
+            dxy_bias = "rising"
+        elif dxy_change < -0.5:
+            dxy_bias = "falling"
+        else:
+            dxy_bias = "neutral"
+
+        # Continuous DXY factor: positive = dollar strengthening
+        # Scale: -1 to +1 capped
+        dxy_intensity = max(-1, min(1, dxy_change / 2))
+
+        # --- Fetch gold news for event context ---
+        headlines = _fetch_gold_news_headlines()
+        news_events = _detect_event_keywords(headlines)
+        event_confidence_adj = -5 * len(news_events) if news_events else 0
+
+        # --- Combine scores (lower = better) ---
+        all_days = sorted(day_avg.index)
+        day_scores = {}
+
+        weights = _load_buyday_weights()
+
+        for d in all_days:
+            # Core 6 factors
+            score = (
+                month_rank_rank.get(d, 15) * weights.get("month_rank", 1.0)
+                + pct_rank.get(d, 15) * weights.get("pct_from_low", 1.5)
+                + win_rank.get(d, 15) * weights.get("win_rate", 2.0)
+                + (recent_pct_rank.get(d, 15) if d in recent_pct_rank.index else 15)
+                * weights.get("recent_pct", 1.0)
+                + (recent_win_rank.get(d, 15) if d in recent_win_rank.index else 15)
+                * weights.get("recent_win", 1.5)
+                + avg_rank.get(d, 15) * weights.get("avg_rank", 0.5)
+            )
+
+            # Factor 7: Day-of-week (continuous — always applies)
+            dow_w = weights.get("dow_bias", 0.8)
+            if d in day_to_dow:
+                dow = day_to_dow[d]
+                if dow <= 4:
+                    score -= dow_bonus.get(dow, 0) * dow_w
+            else:
+                score += 5  # Day doesn't exist this month
+
+            # Factor 8: Volatility regime (continuous — scales with vol_intensity)
+            vol_w = weights.get("vol_regime", 0.6)
+            if d <= 3 or d >= 28:
+                score += vol_intensity * 3 * vol_w  # Penalise extremes
+            elif 10 <= d <= 20:
+                score -= vol_intensity * 2 * vol_w  # Bonus for mid-month
+
+            # Factor 9: VIX-conditioned day preference (continuous)
+            vix_w = weights.get("vix_shift", 1.0)
+            if vix_intensity > 0 and d in hv_win_rank.index:
+                # Elevated VIX → blend in high-VIX win ranking
+                score += hv_win_rank.get(d, 15) * vix_intensity * vix_w * 0.3
+            elif vix_intensity < 0 and d in lv_win_rank.index:
+                # Very calm VIX → blend in low-VIX win ranking
+                score += lv_win_rank.get(d, 15) * abs(vix_intensity) * vix_w * 0.3
+
+            # Factor 10: DXY trend bias (continuous)
+            dxy_w = weights.get("dxy_trend", 0.8)
+            # DXY rising → late-month bonus; DXY falling → early-month bonus
+            if dxy_intensity > 0:
+                # Dollar rising → higher day-of-month is better
+                # Map day 1→penalty, day 31→bonus
+                day_position = (d - 16) / 15  # -1 to +1
+                score -= day_position * dxy_intensity * 3 * dxy_w
+            elif dxy_intensity < 0:
+                # Dollar falling → lower day-of-month is better
+                day_position = (16 - d) / 15  # -1 to +1
+                score -= day_position * abs(dxy_intensity) * 3 * dxy_w
+
+            # Build per-day weekday name for this month
+            dow_label = ""
+            if d in day_to_dow and day_to_dow[d] <= 4:
+                dow_label = ["Mon", "Tue", "Wed", "Thu", "Fri"][day_to_dow[d]]
+
+            day_scores[d] = {
+                "day": d,
+                "avg_price": round(day_avg.get(d, 0), 2),
+                "median_price": round(day_month_rank.get(d, 50), 1),
+                "avg_pct_from_low": round(day_pct_from_low.get(d, 50), 1),
+                "win_rate": round(day_win_rate.get(d, 0), 1),
+                "composite_score": round(score, 2),
+                "data_points": int(df[df["day"] == d].shape[0]),
+                "weekday": dow_label,
+            }
+
+        # Sort by composite score (lower = better buying day)
+        sorted_days = sorted(day_scores.values(), key=lambda x: x["composite_score"])
+        best_days = sorted_days[:3]
+        worst_days = sorted_days[-3:]
+
+        # Build reasoning
+        reasoning = []
+        for i, bd in enumerate(best_days):
+            dow_note = f" ({bd['weekday']})" if bd.get("weekday") else ""
+            reasoning.append(
+                f"**Day {bd['day']}{dow_note}** ranks #{i + 1} — "
+                f"avg {bd['avg_pct_from_low']:.0f}% from monthly low, "
+                f"{bd['win_rate']:.0f}% chance of being in cheapest quarter, "
+                f"based on {bd['data_points']} data points"
+            )
+
+        # Add macro context to reasoning
+        if vol_regime == "high":
+            reasoning.append(
+                f"⚠️ **High volatility regime** (avg {avg_vol:.1f}% intra-month) "
+                f"— mid-month days favored, extreme days penalized"
+            )
+        if vix_regime == "high":
+            reasoning.append(
+                f"🔴 **VIX elevated ({current_vix:.0f})** — fear shifts optimal "
+                f"buy days towards mid/late month"
+            )
+        elif vix_regime == "low":
+            reasoning.append(
+                f"🟢 **VIX low ({current_vix:.0f})** — calm markets favor "
+                f"early-month buying"
+            )
+        if dxy_bias == "rising":
+            reasoning.append(
+                f"💵 **Dollar strengthening** ({dxy_change:+.1f}%) — late-month "
+                f"days tend cheaper when DXY rises"
+            )
+        elif dxy_bias == "falling":
+            reasoning.append(
+                f"💵 **Dollar weakening** ({dxy_change:+.1f}%) — early-month "
+                f"days tend cheaper when DXY falls"
+            )
+        if news_events:
+            event_str = ", ".join(news_events)
+            reasoning.append(
+                f"📰 **Active events detected:** {event_str} — may cause "
+                f"intra-day volatility, consider splitting purchases"
+            )
+
+        # Assess confidence with macro adjustments
+        top_win = best_days[0]["win_rate"]
+        spread = sorted_days[-1]["composite_score"] - sorted_days[0]["composite_score"]
+        confidence = min(
+            90,
+            max(
+                20,
+                int(top_win + spread / 2 + vol_confidence_adj + event_confidence_adj),
+            ),
+        )
+
+        # Build "buy window" recommendation based on macro context
+        best_d = best_days[0]["day"]
+        window_start = max(1, best_d - 2)
+        window_end = min(days_in_month, best_d + 2)
+        if vol_regime == "high" or len(news_events) >= 2:
+            # High uncertainty → widen window, suggest splitting
+            window_start = max(1, best_d - 4)
+            window_end = min(days_in_month, best_d + 4)
+            buy_strategy = "split"
+        elif vol_regime == "low" and not news_events:
+            # Low uncertainty → tight window
+            buy_strategy = "target"
+        else:
+            buy_strategy = "flexible"
+
+        current_price = round(inr_series.iloc[-1], 2)
+
+        return {
+            "best_days": [d["day"] for d in best_days],
+            "worst_days": [d["day"] for d in worst_days],
+            "analysis": day_scores,
+            "confidence": confidence,
+            "reasoning": reasoning,
+            "month": datetime.now().strftime("%B %Y"),
+            "current_price": current_price,
+            "best_day_detail": best_days,
+            "worst_day_detail": worst_days,
+            "vol_regime": vol_regime,
+            "avg_vol": round(avg_vol, 1),
+            "vix_level": round(current_vix, 1),
+            "vix_regime": vix_regime,
+            "dxy_trend": dxy_bias,
+            "dxy_change": round(dxy_change, 1),
+            "news_events": news_events,
+            "news_headlines": headlines[:5],
+            "buy_window": (window_start, window_end),
+            "buy_strategy": buy_strategy,
+        }
+    except Exception:
+        return None
+
+
+def save_gold_buyday_prediction(prediction):
+    """Save this month's gold buy-day prediction for later verification."""
+    now = datetime.now()
+    entry = {
+        "month": now.strftime("%Y-%m"),
+        "predicted_days": prediction["best_days"],
+        "predicted_at": now.strftime("%Y-%m-%d"),
+        "current_price_at_prediction": prediction["current_price"],
+        "confidence": prediction["confidence"],
+        "verified": False,
+        "actual_best_day": None,
+        "actual_best_price": None,
+        "predicted_day_price": None,
+        "savings_pct": None,
+        "was_correct": None,
+    }
+
+    history = _load_buyday_history()
+
+    # Don't duplicate same-month predictions (keep latest)
+    history = [h for h in history if h.get("month") != entry["month"]]
+    history.append(entry)
+    _save_buyday_history(history)
+    return entry
+
+
+def verify_gold_buyday_predictions():
+    """At month end, verify past buy-day predictions against actual prices.
+
+    For each unverified past month:
+      - Fetch that month's daily gold prices
+      - Find the actual cheapest day
+      - Compare with predicted days
+      - Mark correct if predicted day's price was within 2% of actual lowest
+    """
+    history = _load_buyday_history()
+    if not history:
+        return []
+
+    now = datetime.now()
+    current_month = now.strftime("%Y-%m")
+    updated = False
+
+    for pred in history:
+        if pred.get("verified"):
+            continue
+        if pred["month"] == current_month:
+            continue  # Don't verify current month
+
+        # Fetch historical data for that month
+        try:
+            month_start = datetime.strptime(pred["month"] + "-01", "%Y-%m-%d")
+            # Get next month's 1st for end date
+            if month_start.month == 12:
+                month_end = month_start.replace(year=month_start.year + 1, month=1)
+            else:
+                month_end = month_start.replace(month=month_start.month + 1)
+
+            gold = yf.Ticker("GC=F")
+            usd_inr = yf.Ticker("USDINR=X")
+
+            gold_hist = gold.history(
+                start=month_start.strftime("%Y-%m-%d"),
+                end=month_end.strftime("%Y-%m-%d"),
+            )
+            fx_hist = usd_inr.history(
+                start=month_start.strftime("%Y-%m-%d"),
+                end=month_end.strftime("%Y-%m-%d"),
+            )
+
+            if gold_hist.empty or fx_hist.empty:
+                continue
+
+            inr_series = _gold_inr_series(gold_hist, fx_hist)
+            if inr_series is None or len(inr_series) < 5:
+                continue
+
+            import pandas as pd
+
+            month_df = pd.DataFrame({"price": inr_series})
+            month_df["day"] = month_df.index.day
+
+            # Find actual cheapest day
+            day_prices = month_df.groupby("day")["price"].mean()
+            actual_best_day = int(day_prices.idxmin())
+            actual_best_price = round(float(day_prices.min()), 2)
+
+            # Price on predicted days
+            predicted_days = pred.get("predicted_days", [])
+            predicted_prices = []
+            for d in predicted_days:
+                if d in day_prices.index:
+                    predicted_prices.append(round(float(day_prices[d]), 2))
+
+            best_predicted_price = min(predicted_prices) if predicted_prices else None
+
+            # Was correct? Predicted day's price within 2% of actual best
+            if best_predicted_price is not None:
+                savings_pct = round(
+                    ((best_predicted_price - actual_best_price) / actual_best_price)
+                    * 100,
+                    2,
+                )
+                was_correct = savings_pct <= 2.0  # within 2% of the cheapest
+            else:
+                savings_pct = None
+                was_correct = False
+
+            pred["verified"] = True
+            pred["actual_best_day"] = actual_best_day
+            pred["actual_best_price"] = actual_best_price
+            pred["predicted_day_price"] = best_predicted_price
+            pred["savings_pct"] = savings_pct
+            pred["was_correct"] = was_correct
+            updated = True
+
+        except Exception:
+            continue
+
+    if updated:
+        _save_buyday_history(history)
+
+    return history
+
+
+def _load_buyday_weights():
+    """Load learned factor weights for buy-day prediction (10-factor model)."""
+    import os
+
+    weights_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", "gold_buyday_weights.json"
+    )
+    default = {
+        "month_rank": 1.0,
+        "pct_from_low": 1.5,
+        "win_rate": 2.0,
+        "recent_pct": 1.0,
+        "recent_win": 1.5,
+        "avg_rank": 0.5,
+        "dow_bias": 0.8,
+        "vol_regime": 0.6,
+        "vix_shift": 1.0,
+        "dxy_trend": 0.8,
+    }
+    if not os.path.exists(weights_path):
+        return default
+    try:
+        with open(weights_path, "r") as f:
+            saved = json.load(f)
+        # Migrate old weights: ensure all 10 factors present
+        for key, val in default.items():
+            if key not in saved:
+                saved[key] = val
+        return saved
+    except (json.JSONDecodeError, OSError):
+        return default
+
+
+def _save_buyday_weights(weights):
+    """Save learned factor weights."""
+    import os
+
+    weights_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", "gold_buyday_weights.json"
+    )
+    tmp = weights_path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(weights, f, indent=2)
+    os.replace(tmp, weights_path)
+
+
+def learn_gold_buyday():
+    """Self-learning: analyze past buy-day predictions and adjust weights.
+
+    Adjusts all 10 factor weights based on prediction accuracy.
+    Returns dict with learnings and updated weights, or None if not enough data.
+    """
+    history = _load_buyday_history()
+    verified = [h for h in history if h.get("verified")]
+
+    if len(verified) < 2:
+        return None
+
+    total = len(verified)
+    correct = sum(1 for v in verified if v.get("was_correct"))
+    accuracy = round((correct / total) * 100)
+
+    # Analyze which predicted days performed well
+    day_performance = {}
+    for v in verified:
+        for d in v.get("predicted_days", []):
+            if d not in day_performance:
+                day_performance[d] = {"times_predicted": 0, "times_correct": 0}
+            day_performance[d]["times_predicted"] += 1
+            if v.get("was_correct"):
+                day_performance[d]["times_correct"] += 1
+
+    # Adjust weights based on what mattered
+    weights = _load_buyday_weights()
+    avg_miss = []
+    for v in verified:
+        if v.get("savings_pct") is not None:
+            avg_miss.append(v["savings_pct"])
+
+    avg_deviation = sum(avg_miss) / len(avg_miss) if avg_miss else 0
+
+    learnings = []
+
+    if accuracy >= 70:
+        learnings.append(
+            f"✅ Buy-day predictions have been **{accuracy}% accurate** "
+            f"over {total} months — model is working well."
+        )
+    elif accuracy >= 50:
+        learnings.append(
+            f"⚠️ Buy-day accuracy is **{accuracy}%** over {total} months — "
+            f"adjusting weights to improve."
+        )
+        # Boost the most direct signals
+        weights["win_rate"] = min(3.0, weights.get("win_rate", 2.0) + 0.1)
+        weights["pct_from_low"] = min(2.5, weights.get("pct_from_low", 1.5) + 0.1)
+        weights["recent_win"] = min(2.5, weights.get("recent_win", 1.5) + 0.1)
+        # Also nudge macro factors up if they're underweight
+        weights["vix_shift"] = min(1.5, weights.get("vix_shift", 1.0) + 0.05)
+        weights["dxy_trend"] = min(1.2, weights.get("dxy_trend", 0.8) + 0.05)
+    else:
+        learnings.append(
+            f"🔴 Buy-day accuracy is only **{accuracy}%** over {total} months — "
+            f"significantly reweighting factors."
+        )
+        # Boost within-month + recency + macro signals, reduce legacy avg_rank
+        weights["avg_rank"] = max(0.2, weights.get("avg_rank", 0.5) - 0.1)
+        weights["win_rate"] = min(3.0, weights.get("win_rate", 2.0) + 0.2)
+        weights["recent_win"] = min(2.5, weights.get("recent_win", 1.5) + 0.2)
+        weights["pct_from_low"] = min(2.5, weights.get("pct_from_low", 1.5) + 0.15)
+        # Increase macro factor influence
+        weights["vix_shift"] = min(1.5, weights.get("vix_shift", 1.0) + 0.1)
+        weights["dxy_trend"] = min(1.2, weights.get("dxy_trend", 0.8) + 0.1)
+        weights["dow_bias"] = min(1.2, weights.get("dow_bias", 0.8) + 0.1)
+        weights["vol_regime"] = min(1.0, weights.get("vol_regime", 0.6) + 0.1)
+
+    if avg_deviation > 3:
+        learnings.append(
+            f"📊 On average, predicted days were **{avg_deviation:.1f}%** more expensive "
+            f"than the actual cheapest day."
+        )
+    elif avg_deviation <= 1:
+        learnings.append(
+            f"🎯 Excellent precision — predicted days were only **{avg_deviation:.1f}%** "
+            f"off from the cheapest day on average."
+        )
+
+    # Best performing predicted days
+    best_days = sorted(
+        day_performance.items(),
+        key=lambda x: x[1]["times_correct"] / max(x[1]["times_predicted"], 1),
+        reverse=True,
+    )[:3]
+    if best_days:
+        day_strs = [
+            f"Day {d} ({s['times_correct']}/{s['times_predicted']})"
+            for d, s in best_days
+        ]
+        learnings.append(f"📌 Most reliable predicted days: {', '.join(day_strs)}")
+
+    _save_buyday_weights(weights)
+
+    return {
+        "accuracy": accuracy,
+        "total_verified": total,
+        "total_correct": correct,
+        "avg_deviation": round(avg_deviation, 1),
+        "learnings": learnings,
+        "weights": weights,
+        "day_performance": day_performance,
+    }
+
+
+def analyze_gold_price_drivers(months_back=12):
+    """Analyze what drove gold price movements over the past N months.
+
+    For each month, identifies:
+      - Price change and direction
+      - USD/INR movement
+      - US Dollar Index (DXY) change
+      - US 10Y Treasury yield change
+      - VIX level
+      - Gold-Silver ratio
+      - Indian seasonal factor
+      - News sentiment (fetched for current month only, historical via keywords)
+
+    Returns list of monthly driver dicts, sorted newest first.
+    """
+    import pandas as pd
+
+    try:
+        gold = yf.Ticker("GC=F")
+        usd_inr_t = yf.Ticker("USDINR=X")
+        period = f"{months_back + 2}mo"
+
+        gold_hist = gold.history(period=period)
+        fx_hist = usd_inr_t.history(period=period)
+
+        if gold_hist.empty or fx_hist.empty:
+            return None
+
+        inr_series = _gold_inr_series(gold_hist, fx_hist)
+        if inr_series is None or len(inr_series) < 30:
+            return None
+
+        # Also fetch DXY, VIX, Treasury, Silver for the same period
+        dxy_hist = None
+        vix_hist = None
+        tnx_hist = None
+        silver_hist = None
+        try:
+            dxy_hist = yf.Ticker("DX-Y.NYB").history(period=period)
+        except Exception:
+            pass
+        try:
+            vix_hist = yf.Ticker("^VIX").history(period=period)
+        except Exception:
+            pass
+        try:
+            tnx_hist = yf.Ticker("^TNX").history(period=period)
+        except Exception:
+            pass
+        try:
+            silver_hist = yf.Ticker("SI=F").history(period=period)
+        except Exception:
+            pass
+
+        # Build monthly data
+        df = pd.DataFrame({"gold_inr": inr_series})
+        df["month"] = df.index.to_period("M")
+
+        # Gold USD for ratio
+        gold_usd = gold_hist["Close"].copy()
+        gold_usd.index = gold_usd.index.tz_localize(None)
+
+        monthly_results = []
+        months = sorted(df["month"].unique())
+        current_month = pd.Period(datetime.now(), freq="M")
+        analysis_months = [m for m in months if m < current_month][-months_back:]
+
+        # Seasonal labels
+        seasonal_map = {
+            1: "Wedding season",
+            2: "Wedding season",
+            3: "Neutral",
+            4: "Akshaya Tritiya",
+            5: "Akshaya Tritiya",
+            6: "Pre-festive",
+            7: "Off-season",
+            8: "Off-season",
+            9: "Pre-festive",
+            10: "Diwali/Dhanteras",
+            11: "Diwali/Weddings",
+            12: "Year-end",
+        }
+
+        # Gold price driver keywords (for inferring events from price action)
+        _GOLD_DRIVERS = {
+            "fed_rate": {
+                "keywords": [
+                    "fed",
+                    "interest rate",
+                    "rate cut",
+                    "rate hike",
+                    "fomc",
+                    "powell",
+                    "monetary policy",
+                ],
+                "label": "Fed/Interest Rate",
+            },
+            "inflation": {
+                "keywords": ["inflation", "cpi", "consumer price", "price rise"],
+                "label": "Inflation Data",
+            },
+            "geopolitical": {
+                "keywords": [
+                    "war",
+                    "conflict",
+                    "tension",
+                    "sanction",
+                    "geopolitical",
+                    "missile",
+                    "attack",
+                    "crisis",
+                ],
+                "label": "Geopolitical Risk",
+            },
+            "dollar": {
+                "keywords": ["dollar", "usd", "greenback", "dxy"],
+                "label": "USD Strength",
+            },
+            "central_bank": {
+                "keywords": [
+                    "central bank",
+                    "rbi",
+                    "reserve bank",
+                    "gold reserve",
+                    "gold buying",
+                ],
+                "label": "Central Bank Buying",
+            },
+            "demand": {
+                "keywords": [
+                    "demand",
+                    "jewellery",
+                    "jewelry",
+                    "etf",
+                    "inflow",
+                    "outflow",
+                    "import",
+                ],
+                "label": "Demand/ETF Flows",
+            },
+            "recession": {
+                "keywords": [
+                    "recession",
+                    "slowdown",
+                    "gdp",
+                    "economic growth",
+                    "unemployment",
+                ],
+                "label": "Recession Fear",
+            },
+        }
+
+        for month_period in analysis_months:
+            month_data = df[df["month"] == month_period]
+            if month_data.empty or len(month_data) < 3:
+                continue
+
+            month_start = month_data["gold_inr"].iloc[0]
+            month_end = month_data["gold_inr"].iloc[-1]
+            month_high = month_data["gold_inr"].max()
+            month_low = month_data["gold_inr"].min()
+            change_pct = ((month_end - month_start) / month_start) * 100
+            volatility = ((month_high - month_low) / month_low) * 100
+
+            # Direction
+            if change_pct > 3:
+                direction = "Strong Rally"
+            elif change_pct > 1:
+                direction = "Moderate Rise"
+            elif change_pct > -1:
+                direction = "Flat"
+            elif change_pct > -3:
+                direction = "Moderate Decline"
+            else:
+                direction = "Sharp Drop"
+
+            # Drivers identified
+            drivers = []
+
+            # USD/INR change
+            month_start_dt = month_period.start_time
+            month_end_dt = month_period.end_time
+            fx_close = fx_hist["Close"].copy()
+            fx_close.index = fx_close.index.tz_localize(None)
+            fx_month = fx_close[
+                (fx_close.index >= month_start_dt) & (fx_close.index <= month_end_dt)
+            ]
+            usd_inr_change = None
+            if len(fx_month) >= 2:
+                usd_inr_change = (
+                    (fx_month.iloc[-1] - fx_month.iloc[0]) / fx_month.iloc[0]
+                ) * 100
+                if abs(usd_inr_change) > 1:
+                    direction_str = "weakened" if usd_inr_change > 0 else "strengthened"
+                    drivers.append(
+                        f"INR {direction_str} {abs(usd_inr_change):.1f}% vs USD — "
+                        + (
+                            "makes gold costlier in INR"
+                            if usd_inr_change > 0
+                            else "cushions gold price in INR"
+                        )
+                    )
+
+            # DXY change
+            dxy_change = None
+            if dxy_hist is not None and not dxy_hist.empty:
+                dxy_c = dxy_hist["Close"].copy()
+                dxy_c.index = dxy_c.index.tz_localize(None)
+                dxy_m = dxy_c[
+                    (dxy_c.index >= month_start_dt) & (dxy_c.index <= month_end_dt)
+                ]
+                if len(dxy_m) >= 2:
+                    dxy_change = (
+                        (dxy_m.iloc[-1] - dxy_m.iloc[0]) / dxy_m.iloc[0]
+                    ) * 100
+                    if abs(dxy_change) > 1:
+                        dxy_dir = "rose" if dxy_change > 0 else "fell"
+                        impact = "bearish" if dxy_change > 0 else "bullish"
+                        drivers.append(
+                            f"US Dollar Index {dxy_dir} {abs(dxy_change):.1f}% — {impact} for gold"
+                        )
+
+            # Treasury yield change
+            yield_change = None
+            if tnx_hist is not None and not tnx_hist.empty:
+                tnx_c = tnx_hist["Close"].copy()
+                tnx_c.index = tnx_c.index.tz_localize(None)
+                tnx_m = tnx_c[
+                    (tnx_c.index >= month_start_dt) & (tnx_c.index <= month_end_dt)
+                ]
+                if len(tnx_m) >= 2:
+                    yield_change = float(tnx_m.iloc[-1] - tnx_m.iloc[0])
+                    if abs(yield_change) > 0.1:
+                        y_dir = "rose" if yield_change > 0 else "fell"
+                        y_impact = "headwind" if yield_change > 0 else "tailwind"
+                        drivers.append(
+                            f"US 10Y yield {y_dir} {abs(yield_change):.2f}% to {tnx_m.iloc[-1]:.2f}% — {y_impact} for gold"
+                        )
+
+            # VIX level
+            avg_vix = None
+            if vix_hist is not None and not vix_hist.empty:
+                vix_c = vix_hist["Close"].copy()
+                vix_c.index = vix_c.index.tz_localize(None)
+                vix_m = vix_c[
+                    (vix_c.index >= month_start_dt) & (vix_c.index <= month_end_dt)
+                ]
+                if len(vix_m) >= 2:
+                    avg_vix = float(vix_m.mean())
+                    max_vix = float(vix_m.max())
+                    if max_vix > 30:
+                        drivers.append(
+                            f"VIX spiked to {max_vix:.0f} (avg {avg_vix:.0f}) — fear-driven safe-haven demand for gold"
+                        )
+                    elif avg_vix > 25:
+                        drivers.append(
+                            f"Elevated VIX (avg {avg_vix:.0f}) — risk aversion supports gold"
+                        )
+
+            # Gold-Silver ratio
+            gsr = None
+            if silver_hist is not None and not silver_hist.empty:
+                sv_c = silver_hist["Close"].copy()
+                sv_c.index = sv_c.index.tz_localize(None)
+                sv_m = sv_c[
+                    (sv_c.index >= month_start_dt) & (sv_c.index <= month_end_dt)
+                ]
+                g_usd_m = gold_usd[
+                    (gold_usd.index >= month_start_dt)
+                    & (gold_usd.index <= month_end_dt)
+                ]
+                if len(sv_m) > 0 and len(g_usd_m) > 0:
+                    gsr = float(g_usd_m.iloc[-1] / sv_m.iloc[-1])
+                    if gsr > 90:
+                        drivers.append(
+                            f"Gold-Silver ratio at {gsr:.0f}x (very high) — extreme safe-haven premium"
+                        )
+                    elif gsr > 80:
+                        drivers.append(
+                            f"Gold-Silver ratio at {gsr:.0f}x (elevated) — gold outperforming silver"
+                        )
+
+            # Seasonal factor
+            m_num = month_period.month
+            seasonal = seasonal_map.get(m_num, "Neutral")
+            if seasonal != "Neutral":
+                drivers.append(f"Seasonal: {seasonal} — affects domestic demand")
+
+            # Infer likely news drivers from price action patterns
+            likely_events = []
+            if change_pct > 5 and (avg_vix and avg_vix > 25):
+                likely_events.append("Geopolitical Risk")
+            if change_pct > 3 and (dxy_change and dxy_change < -1):
+                likely_events.append("USD Weakness")
+            if change_pct > 3 and (yield_change and yield_change < -0.1):
+                likely_events.append("Falling Yields / Rate Cut Expectations")
+            if change_pct < -3 and (dxy_change and dxy_change > 1):
+                likely_events.append("USD Strength")
+            if change_pct < -3 and (yield_change and yield_change > 0.1):
+                likely_events.append("Rising Yields / Rate Hike Fears")
+            if volatility > 8:
+                likely_events.append("High Volatility (event-driven)")
+
+            # If no macro drivers found, note that
+            if not drivers and not likely_events:
+                drivers.append(
+                    "No strong macro driver identified — normal market movement"
+                )
+
+            monthly_results.append(
+                {
+                    "month": str(month_period),
+                    "month_num": m_num,
+                    "open": round(month_start, 2),
+                    "close": round(month_end, 2),
+                    "high": round(month_high, 2),
+                    "low": round(month_low, 2),
+                    "change_pct": round(change_pct, 2),
+                    "volatility_pct": round(volatility, 2),
+                    "direction": direction,
+                    "drivers": drivers,
+                    "likely_events": likely_events,
+                    "usd_inr_change": (
+                        round(usd_inr_change, 2) if usd_inr_change else None
+                    ),
+                    "dxy_change": round(dxy_change, 2) if dxy_change else None,
+                    "yield_change": round(yield_change, 2) if yield_change else None,
+                    "avg_vix": round(avg_vix, 1) if avg_vix else None,
+                    "gold_silver_ratio": round(gsr, 1) if gsr else None,
+                    "seasonal": seasonal,
+                }
+            )
+
+        # Reverse so newest first
+        monthly_results.reverse()
+
+        # Build overall insights
+        insights = []
+        up_months = [m for m in monthly_results if m["change_pct"] > 1]
+        down_months = [m for m in monthly_results if m["change_pct"] < -1]
+        flat_months = [m for m in monthly_results if -1 <= m["change_pct"] <= 1]
+
+        insights.append(
+            f"Over {len(monthly_results)} months: {len(up_months)} up, "
+            f"{len(down_months)} down, {len(flat_months)} flat"
+        )
+
+        # Most volatile months
+        most_volatile = sorted(
+            monthly_results, key=lambda x: x["volatility_pct"], reverse=True
+        )[:3]
+        vol_strs = [f"{m['month']} ({m['volatility_pct']:.1f}%)" for m in most_volatile]
+        insights.append(f"Most volatile months: {', '.join(vol_strs)}")
+
+        # Dominant driver pattern
+        all_drivers_flat = []
+        for m in monthly_results:
+            all_drivers_flat.extend(m.get("likely_events", []))
+        if all_drivers_flat:
+            from collections import Counter
+
+            driver_counts = Counter(all_drivers_flat).most_common(3)
+            driver_strs = [f"{d} ({c}x)" for d, c in driver_counts]
+            insights.append(f"Top price drivers: {', '.join(driver_strs)}")
+
+        return {
+            "months": monthly_results,
+            "insights": insights,
+            "total_months": len(monthly_results),
+        }
+
+    except Exception:
+        return None
 
 
 def detect_manipulation(closes, volumes, window=20):
@@ -4323,11 +5744,11 @@ def _load_learned_weights(asset):
 
     if asset in ("gold", "silver"):
         log_path = os.path.join(
-            os.path.dirname(__file__), "data", f"{asset}_predictions.json"
+            os.path.dirname(__file__), "..", "data", f"{asset}_predictions.json"
         )
     else:
         log_path = os.path.join(
-            os.path.dirname(__file__), "data", "stock_predictions.json"
+            os.path.dirname(__file__), "..", "data", "stock_predictions.json"
         )
 
     if not os.path.exists(log_path):
@@ -4500,7 +5921,7 @@ def get_prediction_learnings(asset="gold"):
     import os
 
     log_path = os.path.join(
-        os.path.dirname(__file__), "data", f"{asset}_predictions.json"
+        os.path.dirname(__file__), "..", "data", f"{asset}_predictions.json"
     )
     if not os.path.exists(log_path):
         return None
@@ -4518,7 +5939,9 @@ def verify_gold_predictions():
     """Check past predictions against actual prices. Returns list of verified predictions."""
     import os
 
-    log_path = os.path.join(os.path.dirname(__file__), "data", "gold_predictions.json")
+    log_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", "gold_predictions.json"
+    )
     if not os.path.exists(log_path):
         return []
 
@@ -5257,7 +6680,9 @@ def save_stock_prediction(prediction, ticker_symbol):
     except ImportError:
         pass
 
-    log_path = os.path.join(os.path.dirname(__file__), "data", "stock_predictions.json")
+    log_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", "stock_predictions.json"
+    )
 
     predictions = []
     if os.path.exists(log_path):
@@ -5288,7 +6713,9 @@ def verify_stock_predictions():
     """Check past stock predictions against actual prices. Returns list of verified predictions."""
     import os
 
-    log_path = os.path.join(os.path.dirname(__file__), "data", "stock_predictions.json")
+    log_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", "stock_predictions.json"
+    )
     if not os.path.exists(log_path):
         return []
 
@@ -5355,7 +6782,9 @@ def get_stock_prediction_learnings(ticker_symbol=None):
     """
     import os
 
-    log_path = os.path.join(os.path.dirname(__file__), "data", "stock_predictions.json")
+    log_path = os.path.join(
+        os.path.dirname(__file__), "..", "data", "stock_predictions.json"
+    )
     if not os.path.exists(log_path):
         return None
 
@@ -5416,7 +6845,7 @@ def save_scanner_suggestion(suggestion):
         pass
 
     log_path = os.path.join(
-        os.path.dirname(__file__), "data", "scanner_predictions.json"
+        os.path.dirname(__file__), "..", "data", "scanner_predictions.json"
     )
 
     predictions = []
@@ -5454,7 +6883,7 @@ def verify_scanner_predictions():
     import os
 
     log_path = os.path.join(
-        os.path.dirname(__file__), "data", "scanner_predictions.json"
+        os.path.dirname(__file__), "..", "data", "scanner_predictions.json"
     )
     if not os.path.exists(log_path):
         return []
@@ -5544,7 +6973,7 @@ def get_scanner_prediction_learnings():
     import os
 
     log_path = os.path.join(
-        os.path.dirname(__file__), "data", "scanner_predictions.json"
+        os.path.dirname(__file__), "..", "data", "scanner_predictions.json"
     )
     if not os.path.exists(log_path):
         return None
@@ -5564,9 +6993,27 @@ def get_scanner_prediction_learnings():
 
 
 def get_silver_price():
-    """Fetch silver price in INR per gram (international silver converted via USD/INR).
-    Chennai silver ≈ international price + ~5% premium (GST + making).
+    """Fetch silver price in INR per gram.
+    Primary source: livechennai.com.  Fallback: SI=F × USD/INR.
     """
+    # --- Try Chennai actual rates first ---
+    chennai = fetch_chennai_rates()
+    if chennai and chennai.get("silver"):
+        current = chennai["silver"]
+        change_pct = None
+        hist = chennai.get("silver_history", [])
+        if len(hist) >= 2:
+            prev = hist[1]["silver_gram"]
+            if prev > 0:
+                change_pct = round(((current - prev) / prev) * 100, 2)
+        return {
+            "per_gram": current,
+            "per_100gram": round(current * 100, 2),
+            "per_kg": chennai.get("silver_kg", round(current * 1000, 2)),
+            "change_pct": change_pct,
+        }
+
+    # --- Fallback: Yahoo Finance ---
     try:
         silver = yf.Ticker("SI=F")  # Silver futures USD/troy oz
         usd_inr = yf.Ticker("USDINR=X")
@@ -6183,7 +7630,7 @@ def save_silver_prediction(prediction):
         pass
 
     log_path = os.path.join(
-        os.path.dirname(__file__), "data", "silver_predictions.json"
+        os.path.dirname(__file__), "..", "data", "silver_predictions.json"
     )
     predictions = []
     if os.path.exists(log_path):
@@ -6210,7 +7657,7 @@ def verify_silver_predictions():
     import os
 
     log_path = os.path.join(
-        os.path.dirname(__file__), "data", "silver_predictions.json"
+        os.path.dirname(__file__), "..", "data", "silver_predictions.json"
     )
     if not os.path.exists(log_path):
         return []

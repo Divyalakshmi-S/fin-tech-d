@@ -16,7 +16,6 @@ from analysis import (
 import yfinance as yf
 
 from views._manage_helpers import (
-    PORTFOLIO_PATH,
     _months_between,
     _fetch_current_prices,
     _save_portfolio,
@@ -29,6 +28,7 @@ from views._manage_helpers import (
     _safe_float,
     _parse_row_smart,
 )
+
 
 def render(holdings):
     st.title("⚙️ Manage Portfolio")
@@ -52,81 +52,10 @@ def render(holdings):
     if _auto_fix_needed:
         _save_portfolio(portfolio_rows)
 
-    # ------ Portfolio Summary ------
     if portfolio_rows:
-        tickers = [r.get("ticker", "") for r in portfolio_rows if r.get("ticker")]
-        current_prices = _fetch_current_prices(tuple(tickers)) if tickers else {}
-
-        total_invested = 0
-        total_current = 0
-        ltcg_count = 0
-        stcg_count = 0
-        sip_count = 0
-        sip_total_monthly = 0
-        for row in portfolio_rows:
-            is_sip = row.get("investment_mode") == "sip"
-            ticker = row.get("ticker", "")
-            invested = _get_entry_invested(row)
-            qty = _get_entry_quantity(row)
-            sip_amt = float(row.get("sip_monthly", 0))
-
-            if is_sip:
-                sip_count += 1
-                sip_total_monthly += sip_amt
-
-            total_invested += invested
-
-            if not is_sip and ticker and ticker in current_prices:
-                total_current += current_prices[ticker] * qty
-            else:
-                total_current += invested
-
-            # Tax status from earliest buy date
-            transactions = row.get("transactions", [])
-            if transactions:
-                dates = []
-                for txn in transactions:
-                    try:
-                        dates.append(
-                            datetime.strptime(txn["buy_date"], "%Y-%m-%d").date()
-                        )
-                    except (ValueError, KeyError):
-                        pass
-                if dates:
-                    earliest = min(dates)
-                    days = (date.today() - earliest).days
-                    if days > 365:
-                        ltcg_count += 1
-                    else:
-                        stcg_count += 1
-            else:
-                bd_str = row.get("buy_date", "")
-                if bd_str:
-                    try:
-                        bd = datetime.strptime(bd_str, "%Y-%m-%d").date()
-                        days = (date.today() - bd).days
-                        if days > 365:
-                            ltcg_count += 1
-                        else:
-                            stcg_count += 1
-                    except ValueError:
-                        pass
-
-        total_pnl = total_current - total_invested
-        pnl_pct = (total_pnl / total_invested * 100) if total_invested > 0 else 0
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric(
-            "Holdings",
-            f"{len(portfolio_rows)}",
-            f"{sip_count} SIPs · ₹{sip_total_monthly:,.0f}/mo" if sip_count else None,
+        st.info(
+            f"📁 **{len(portfolio_rows)} holdings** in your portfolio. See **📁 My Portfolio** for detailed summary & P&L."
         )
-        c2.metric("Invested", f"₹{total_invested:,.0f}")
-        c3.metric("Current Value", f"₹{total_current:,.0f}", f"{pnl_pct:+.1f}%")
-        c4.metric(
-            "P&L", f"₹{total_pnl:+,.0f}", f"LTCG: {ltcg_count} · STCG: {stcg_count}"
-        )
-
         st.divider()
 
     # ------ Add New Investment ------

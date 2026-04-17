@@ -1,135 +1,158 @@
 import streamlit as st
+import pandas as pd
 import yfinance as yf
 
-from analysis import analyze_portfolio
+
+_PERIOD_OPTIONS = {
+    "1W": "5d",
+    "1M": "1mo",
+    "3M": "3mo",
+    "6M": "6mo",
+    "1Y": "1y",
+    "5Y": "5y",
+}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def _fetch_index_data(ticker_symbol):
+def _fetch_index_data(ticker_symbol, period="1mo"):
     """Cached index data fetch — avoids re-downloading on every rerun."""
     try:
-        data = yf.Ticker(ticker_symbol).history(period="1mo")
+        data = yf.Ticker(ticker_symbol).history(period=period)
         return data
     except Exception:
         return None
 
 
+def _render_index_card(label, ticker, period):
+    """Render a single index metric + chart."""
+    data = _fetch_index_data(ticker, period)
+    if data is not None and not data.empty and len(data) >= 2:
+        current = round(data["Close"].iloc[-1], 2)
+        prev = round(data["Close"].iloc[-2], 2)
+        change = round(current - prev, 2)
+        pct = round((change / prev) * 100, 2)
+        st.metric(label, f"₹{current:,.2f}", f"{change:+,.2f} ({pct:+.2f}%)")
+
+        # Period high/low
+        high = round(data["Close"].max(), 2)
+        low = round(data["Close"].min(), 2)
+        hl1, hl2 = st.columns(2)
+        hl1.caption(f"High: ₹{high:,.2f}")
+        hl2.caption(f"Low: ₹{low:,.2f}")
+
+        chart_series = data["Close"].copy()
+        chart_series.index = chart_series.index.tz_localize(None)
+        st.line_chart(chart_series, height=200)
+        return current, data
+    else:
+        st.warning(f"{label} data unavailable")
+        return None, None
+
+
 def render(holdings):
     st.title("🏠 Market Overview")
 
-    # Nifty + Sensex side by side
+    # --- Timeframe selector ---
+    selected_period_label = st.radio(
+        "Timeframe",
+        list(_PERIOD_OPTIONS.keys()),
+        index=1,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    yf_period = _PERIOD_OPTIONS[selected_period_label]
+
+    # --- Nifty + Sensex side by side ---
     col1, col2 = st.columns(2)
 
     with col1:
-        nifty_data = _fetch_index_data("^NSEI")
-        if nifty_data is not None and not nifty_data.empty and len(nifty_data) >= 2:
-            current = round(nifty_data["Close"].iloc[-1], 2)
-            prev = round(nifty_data["Close"].iloc[-2], 2)
-            change = round(current - prev, 2)
-            pct = round((change / prev) * 100, 2)
-            st.metric("Nifty 50", f"₹{current:,.2f}", f"{change:+,.2f} ({pct:+.2f}%)")
-            chart_series = nifty_data["Close"].copy()
-            chart_series.index = chart_series.index.tz_localize(None)
-            st.line_chart(chart_series, height=200)
-        else:
-            st.warning("Nifty data unavailable")
+        nifty_price, nifty_data = _render_index_card("Nifty 50", "^NSEI", yf_period)
 
     with col2:
-        sensex_data = _fetch_index_data("^BSESN")
-        if sensex_data is not None and not sensex_data.empty and len(sensex_data) >= 2:
-            current = round(sensex_data["Close"].iloc[-1], 2)
-            prev = round(sensex_data["Close"].iloc[-2], 2)
-            change = round(current - prev, 2)
-            pct = round((change / prev) * 100, 2)
-            st.metric("Sensex", f"₹{current:,.2f}", f"{change:+,.2f} ({pct:+.2f}%)")
-            chart_series = sensex_data["Close"].copy()
-            chart_series.index = chart_series.index.tz_localize(None)
-            st.line_chart(chart_series, height=200)
-        else:
-            st.warning("Sensex data unavailable")
+        sensex_price, sensex_data = _render_index_card("Sensex", "^BSESN", yf_period)
 
     st.divider()
 
-    # Quick alerts
-    if holdings:
-        _alerts_fragment(holdings)
+    # --- Market Pulse: VIX + Gold + USD/INR ---
+    _market_pulse_fragment()
+
+    st.divider()
+
+    # --- Broader Market Indices ---
+    _market_breadth_fragment()
 
 
 @st.fragment()
-def _alerts_fragment(holdings):
-    """Fragment — alerts re-run independently without re-fetching index data."""
-    with st.spinner("Analyzing holdings..."):
-        results = analyze_portfolio(holdings)
+def _market_pulse_fragment():
+    """Fragment — market pulse loads independently so main indices render fast."""
+    st.subheader("📡 Market Pulse")
+    pulse1, pulse2, pulse3, pulse4 = st.columns(4)
 
-    alerts = []
-    for r in results:
-        a = r["analysis"]
-        if a is None:
-            continue
-        name = r["holding"]["name"]
-        amt = r["holding"]["amount"]
-        price = a.get("price", 0)
-        if a["rsi"] is not None and a["rsi"] <= 30:
-            buy_amt = round(amt * 0.25, -2) or 500
-            alerts.append(
-                (
-                    "🟢",
-                    f"**{name}** has been falling a lot recently and looks cheap right now — could be a good time to buy",
-                    f"Consider buying ~₹{buy_amt:,.0f} more of {name} to average down your cost. "
-                    f"Current price is ₹{price:,.2f}. Set a stop-loss 10% below if you buy.",
-                )
+    with pulse1:
+        vix_data = _fetch_index_data("^INDIAVIX", "5d")
+        if vix_data is not None and not vix_data.empty:
+            vix = round(vix_data["Close"].iloc[-1], 2)
+            vix_prev = (
+                round(vix_data["Close"].iloc[-2], 2) if len(vix_data) >= 2 else vix
             )
-        if a["rsi"] is not None and a["rsi"] >= 70:
-            sell_pct = 20
-            sell_amt = round(amt * sell_pct / 100, -2) or 500
-            alerts.append(
-                (
-                    "⚠️",
-                    f"**{name}** has been rising fast lately and may be too expensive right now — consider selling some to lock in your gains",
-                    f"Sell ~₹{sell_amt:,.0f} ({sell_pct}% of your holding) to lock in profits. "
-                    f"You can reinvest into an index fund or a stock that's currently undervalued.",
-                )
+            vix_change = round(vix - vix_prev, 2)
+            vix_emoji = "🟢" if vix < 15 else "🟡" if vix < 20 else "🔴"
+            vix_mood = (
+                "Low Fear" if vix < 15 else "Moderate" if vix < 20 else "High Fear"
             )
-        if a["from_high_pct"] and a["from_high_pct"] < -20:
-            drop = abs(a["from_high_pct"])
-            alerts.append(
-                (
-                    "📉",
-                    f"**{name}** is currently {drop:.0f}% lower than its best price in the last 1 year — it has dropped significantly",
-                    f"If {name} is fundamentally strong, this dip is a buying opportunity — add ₹{round(amt * 0.15, -2) or 500:,.0f}. "
-                    f"If you're unsure, wait and watch for a trend reversal before adding more.",
-                )
-            )
-        if a["crossover"]:
-            if "Golden" in str(a["crossover"]):
-                alerts.append(
-                    (
-                        "🚨",
-                        f"**{name}**: The short-term trend just crossed above the long-term trend — this is a bullish signal, the price may keep going up",
-                        f"Hold your position in {name} — the momentum is positive. "
-                        f"You could add ₹{round(amt * 0.1, -2) or 500:,.0f} more if you believe in the stock long-term.",
-                    )
-                )
-            elif "Death" in str(a["crossover"]):
-                alerts.append(
-                    (
-                        "🚨",
-                        f"**{name}**: The short-term trend just crossed below the long-term trend — this is a warning signal, the price may keep falling",
-                        f"Consider setting a stop-loss at ₹{price * 0.9:,.2f} (10% below current price) to limit losses. "
-                        f"If it breaks below that, sell to protect your capital.",
-                    )
-                )
+            st.metric(f"{vix_emoji} India VIX", f"{vix:.2f}", f"{vix_change:+.2f}")
+            st.caption(f"Market mood: **{vix_mood}**")
+        else:
+            st.metric("India VIX", "N/A")
+
+    with pulse2:
+        gold_data = _fetch_index_data("GC=F", "5d")
+        if gold_data is not None and not gold_data.empty and len(gold_data) >= 2:
+            gold = round(gold_data["Close"].iloc[-1], 2)
+            gold_prev = round(gold_data["Close"].iloc[-2], 2)
+            gold_chg = round(((gold - gold_prev) / gold_prev) * 100, 2)
+            st.metric("Gold (USD/oz)", f"${gold:,.2f}", f"{gold_chg:+.2f}%")
+        else:
+            st.metric("Gold (USD/oz)", "N/A")
+
+    with pulse3:
+        fx_data = _fetch_index_data("USDINR=X", "5d")
+        if fx_data is not None and not fx_data.empty and len(fx_data) >= 2:
+            fx = round(fx_data["Close"].iloc[-1], 4)
+            fx_prev = round(fx_data["Close"].iloc[-2], 4)
+            fx_chg = round(fx - fx_prev, 4)
+            st.metric("USD/INR", f"₹{fx:.2f}", f"{fx_chg:+.4f}")
+        else:
+            st.metric("USD/INR", "N/A")
+
+    with pulse4:
+        crude_data = _fetch_index_data("CL=F", "5d")
+        if crude_data is not None and not crude_data.empty and len(crude_data) >= 2:
+            crude = round(crude_data["Close"].iloc[-1], 2)
+            crude_prev = round(crude_data["Close"].iloc[-2], 2)
+            crude_chg = round(((crude - crude_prev) / crude_prev) * 100, 2)
+            st.metric("Crude Oil (USD)", f"${crude:,.2f}", f"{crude_chg:+.2f}%")
+        else:
+            st.metric("Crude Oil", "N/A")
+
+
+@st.fragment()
+def _market_breadth_fragment():
+    """Fragment — sector indices load independently."""
+    st.subheader("📊 Market Breadth")
+    breadth_indices = {
+        "Bank Nifty": "^NSEBANK",
+        "Nifty IT": "^CNXIT",
+        "Nifty Midcap 50": "^NSEMDCP50",
+    }
+    bcols = st.columns(len(breadth_indices))
+    for bcol, (idx_label, idx_ticker) in zip(bcols, breadth_indices.items()):
+        with bcol:
+            idx_data = _fetch_index_data(idx_ticker, "5d")
+            if idx_data is not None and not idx_data.empty and len(idx_data) >= 2:
+                cur = round(idx_data["Close"].iloc[-1], 2)
+                prev = round(idx_data["Close"].iloc[-2], 2)
+                chg_pct = round(((cur - prev) / prev) * 100, 2)
+                st.metric(idx_label, f"₹{cur:,.2f}", f"{chg_pct:+.2f}%")
             else:
-                alerts.append(("🚨", f"**{name}**: {a['crossover']}", ""))
-
-    if alerts:
-        st.subheader("⚡ Action Alerts")
-        for item in alerts:
-            icon, msg = item[0], item[1]
-            fix = item[2] if len(item) > 2 else ""
-            st.markdown(f"{icon} {msg}")
-            if fix:
-                with st.expander("💡 What should I do?"):
-                    st.markdown(fix)
-    else:
-        st.success("✅ No urgent alerts — portfolio looks stable!")
+                st.metric(idx_label, "N/A")

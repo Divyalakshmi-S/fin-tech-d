@@ -9,8 +9,14 @@ def render(holdings):
         "Key headlines with short takeaways so you don't have to read everything"
     )
 
-    news_tab1, news_tab2, news_tab3, news_tab4 = st.tabs(
-        ["📊 Stocks", "🪙 Gold", "📈 Mutual Funds", "💡 Opportunities"]
+    news_tab1, news_tab2, news_tab3, news_tab4, news_tab5 = st.tabs(
+        [
+            "📊 Stocks",
+            "🪙 Gold",
+            "📈 Mutual Funds",
+            "💡 Opportunities",
+            "📌 My Holdings",
+        ]
     )
 
     categories = {
@@ -41,6 +47,21 @@ def render(holdings):
             try:
                 news_items = cached_news.get(category, [])
                 if news_items:
+                    # Search filter
+                    search = st.text_input(
+                        "🔍 Filter headlines",
+                        key=f"news_search_{label}",
+                        placeholder="Type to filter...",
+                    )
+                    if search:
+                        search_lower = search.lower()
+                        news_items = [
+                            n
+                            for n in news_items
+                            if search_lower in n["title"].lower()
+                            or search_lower in n.get("summary", "").lower()
+                        ]
+
                     # Quick sentiment summary at top
                     bull = sum(1 for n in news_items if n["sentiment"] == "bullish")
                     bear = sum(1 for n in news_items if n["sentiment"] == "bearish")
@@ -91,6 +112,75 @@ def render(holdings):
                     st.caption("No news available")
             except Exception:
                 st.caption("Could not fetch news")
+
+    # --- My Holdings News Tab ---
+    with news_tab5:
+        if holdings:
+            st.caption("News filtered to companies you own")
+
+            # Gather all news and match against holdings
+            all_news_items = []
+            for cat_query in categories.values():
+                all_news_items.extend(cached_news.get(cat_query, []))
+
+            holding_names = [h["name"].lower() for h in holdings]
+            holding_tickers = [
+                (h.get("ticker") or "").replace(".NS", "").replace(".BO", "").lower()
+                for h in holdings
+            ]
+
+            import re
+
+            def _word_match(needle, haystack):
+                """Match whole words only to avoid false positives like 'IT' matching 'it is'."""
+                if len(needle) < 3:
+                    return False
+                return bool(re.search(r"\b" + re.escape(needle) + r"\b", haystack))
+
+            matched_news = []
+            for item in all_news_items:
+                title_lower = item["title"].lower()
+                matched_holding = None
+                for i, h in enumerate(holdings):
+                    if _word_match(holding_names[i], title_lower) or (
+                        holding_tickers[i]
+                        and _word_match(holding_tickers[i], title_lower)
+                    ):
+                        matched_holding = h
+                        break
+                if matched_holding:
+                    matched_news.append((item, matched_holding))
+
+            if matched_news:
+                bull = sum(1 for n, _ in matched_news if n["sentiment"] == "bullish")
+                bear = sum(1 for n, _ in matched_news if n["sentiment"] == "bearish")
+                mc1, mc2 = st.columns(2)
+                mc1.metric("🟢 Positive for your stocks", f"{bull}")
+                mc2.metric("🔴 Negative for your stocks", f"{bear}")
+
+                st.divider()
+                for item, holding in matched_news:
+                    icon, mood = sentiment_labels.get(
+                        item["sentiment"], ("⚪", "Neutral")
+                    )
+                    st.markdown(
+                        f"**{icon} {item['title']}**  \n"
+                        f"📌 *Affects: {holding['name']} (₹{holding['amount']:,.0f})*"
+                    )
+                    summary = item.get("summary", "")
+                    if summary:
+                        st.caption(f"📝 {summary}")
+                    link = item.get("link", "")
+                    if link and link.startswith("https://"):
+                        st.markdown(f"[Read full article →]({link})")
+                    st.markdown("---")
+            else:
+                st.info(
+                    "No news found for your specific holdings today. "
+                    "Check the other tabs for general market news."
+                )
+        else:
+            st.info("Add holdings in **Manage Portfolio** to see personalized news.")
 
     # --- What Should I Do? section ---
     st.divider()
@@ -354,12 +444,31 @@ def render(holdings):
                                     )
                                 )
                         else:
-                            suggestions.append(
-                                (
-                                    icon,
-                                    f"**{sector_key.title()} sector news** — You hold {names} ({pct:.0f}% of portfolio). Check the news tab for details on how this affects your holdings.",
+                            # Give actionable advice based on allocation size
+                            if pct > 20:
+                                suggestions.append(
+                                    (
+                                        icon,
+                                        f"**{sector_key.title()} sector news** — You hold {names} ({pct:.0f}% of portfolio). "
+                                        f"Heavy allocation — consider trimming if any position is up significantly, or hold if fundamentals are strong.",
+                                    )
                                 )
-                            )
+                            elif pct > 5:
+                                suggestions.append(
+                                    (
+                                        icon,
+                                        f"**{sector_key.title()} sector news** — You hold {names} ({pct:.0f}% of portfolio). "
+                                        f"Good allocation size — no action needed unless you see a clear trend change.",
+                                    )
+                                )
+                            else:
+                                suggestions.append(
+                                    (
+                                        icon,
+                                        f"**{sector_key.title()} sector news** — You hold {names} ({pct:.0f}% of portfolio). "
+                                        f"Small position — consider adding more on dips if you're bullish on this sector.",
+                                    )
+                                )
                 else:
                     # User doesn't own this sector
                     if sector_key not in (

@@ -1,6 +1,20 @@
 import streamlit as st
 from datetime import datetime
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not required on Streamlit Cloud
+
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+except ImportError:
+    pass  # truststore not required; needed when behind SSL-intercepting proxies
+
 from analysis import load_portfolio_extended
 import auth
 import db
@@ -17,13 +31,10 @@ from views import (
     learn,
     manage,
     predictions,
-    net_worth,
     calculators,
     tax_planning,
     financial_health,
     checkup,
-    rebalancing,
-    retirement,
     family,
 )
 from ui_helpers import render_disclaimer
@@ -139,6 +150,13 @@ if st.sidebar.button(f"Theme: {theme_label}"):
 
 st.sidebar.divider()
 
+# Data refresh
+if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
+    st.cache_data.clear()
+    st.rerun()
+
+st.sidebar.caption(f"⏱️ Data cached for 5 min")
+
 page = st.sidebar.radio(
     "Navigate",
     [
@@ -150,14 +168,11 @@ page = st.sidebar.radio(
         "───── My Money ─────",
         "📁 My Portfolio",
         "🔬 Holdings Analysis",
-        "💎 Net Worth",
         "🎯 Goals",
         "💰 Budget",
         "───── Planning ─────",
         "📋 Tax Planning",
         "🧮 Calculators",
-        "⚖️ Rebalancing",
-        "🏦 Retirement",
         "👨‍👩‍👧‍👦 Family",
         "🛡️ Financial Health",
         "🏥 Health Checkup",
@@ -180,10 +195,19 @@ def load_holdings(_user_id):
     if db.is_db_available() and _user_id:
         portfolio_rows = db.load_portfolio(_user_id)
         return load_portfolio_extended(from_rows=portfolio_rows)
-    return load_portfolio_extended()
+    # Use user-scoped JSON path for offline fallback
+    user_path = db._json_path("portfolio.json", user_id=_user_id)
+    return load_portfolio_extended(path=user_path)
 
 
 holdings = load_holdings(user_id)
+
+# --- New user welcome banner ---
+if not holdings and page not in ("⚙️ Manage Portfolio", "📚 Learn", "🧮 Calculators"):
+    st.info(
+        "👋 **Welcome!** You haven't added any holdings yet. "
+        "Head to **⚙️ Manage Portfolio** in the sidebar to add your stocks and mutual funds."
+    )
 
 
 # --- Page Router ---
@@ -194,13 +218,10 @@ PAGE_MAP = {
     "🔬 Holdings Analysis": holdings_page.render,
     "🔎 Market Scanner": scanner.render,
     "📰 News": news.render,
-    "💎 Net Worth": net_worth.render,
     "🎯 Goals": goals.render,
     "💰 Budget": budget.render,
     "📋 Tax Planning": tax_planning.render,
     "🧮 Calculators": calculators.render,
-    "⚖️ Rebalancing": rebalancing.render,
-    "🏦 Retirement": retirement.render,
     "👨‍👩‍👧‍👦 Family": family.render,
     "🛡️ Financial Health": financial_health.render,
     "🏥 Health Checkup": checkup.render,

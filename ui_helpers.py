@@ -66,7 +66,8 @@ def render_disclaimer():
 
 def metal_inr_series(metal_hist, fx_hist, premium=1.03):
     """Convert metal USD/oz history to INR/gram using forward-filled FX rates.
-    Handles weekends/holidays where trading dates don't overlap."""
+    Handles weekends/holidays where trading dates don't overlap.
+    Calibrates to actual Chennai retail rates from livechennai.com."""
     if metal_hist.empty or fx_hist.empty:
         return None
     combined = pd.DataFrame(
@@ -79,7 +80,22 @@ def metal_inr_series(metal_hist, fx_hist, premium=1.03):
     combined = combined.dropna(subset=["metal_usd"])
     if combined.empty:
         return None
-    return (combined["metal_usd"] * combined["fx"]) / 31.1035 * premium
+    series = (combined["metal_usd"] * combined["fx"]) / 31.1035 * premium
+
+    # Calibrate to actual Chennai rate
+    try:
+        from analysis import get_gold_calibration_factor, get_silver_calibration_factor
+
+        is_gold = premium <= 1.04  # gold premium ~1.03, silver ~1.05+
+        if is_gold:
+            factor, _ = get_gold_calibration_factor()
+        else:
+            factor, _ = get_silver_calibration_factor()
+        if factor != 1.0:
+            series = series / premium * factor
+    except Exception:
+        pass  # fallback to uncalibrated
+    return series
 
 
 def generate_portfolio_pdf(holdings, pnl_data):

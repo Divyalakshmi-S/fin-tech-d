@@ -11,8 +11,9 @@ from analysis import (
     save_stock_prediction,
     verify_stock_predictions,
     fetch_ticker_news,
-    fetch_portfolio_news_with_impact,
     analyze_news_impact,
+    calculate_rebalancing,
+    DEFAULT_TARGET_ALLOCATION,
 )
 from ui_helpers import (
     SIGNAL_MAP,
@@ -185,6 +186,15 @@ def render(holdings):
 
             # Summary comparison table first
             st.subheader("📋 Quick Comparison")
+
+            # Sort control
+            sort_col = st.selectbox(
+                "Sort by",
+                ["Name", "Today %", "RSI", "vs Best Price", "1 Year Return"],
+                index=1,
+                key="holdings_sort",
+            )
+
             summary_rows = []
             for r in results:
                 a = r["analysis"]
@@ -218,80 +228,51 @@ def render(holdings):
                             else "—"
                         ),
                         "1 Year": f"{a['one_yr_return']:+.1f}%",
+                        "Volume": (
+                            f"{a['vol_ratio']:.1f}x" if a.get("vol_ratio") else "—"
+                        ),
+                        "Signal": (
+                            str(a.get("crossover", "")) if a.get("crossover") else "—"
+                        ),
+                        "_sort_today": a["daily_change_pct"],
+                        "_sort_rsi": a["rsi"] if a["rsi"] else 50,
+                        "_sort_high": a["from_high_pct"] if a["from_high_pct"] else 0,
+                        "_sort_1y": a["one_yr_return"] if a["one_yr_return"] else 0,
                     }
                 )
 
             if summary_rows:
-                st.dataframe(
-                    pd.DataFrame(summary_rows),
-                    width="stretch",
-                    hide_index=True,
-                    height=min(len(summary_rows) * 40 + 40, 450),
+                # Sort
+                sort_key_map = {
+                    "Name": lambda x: x["Name"],
+                    "Today %": lambda x: x["_sort_today"],
+                    "RSI": lambda x: x["_sort_rsi"],
+                    "vs Best Price": lambda x: x["_sort_high"],
+                    "1 Year Return": lambda x: x["_sort_1y"],
+                }
+                reverse = sort_col != "Name"
+                summary_rows.sort(
+                    key=sort_key_map.get(sort_col, lambda x: x["Name"]), reverse=reverse
                 )
 
-            st.divider()
+                # Remove internal sort keys before display
+                display_rows = [
+                    {k: v for k, v in row.items() if not k.startswith("_")}
+                    for row in summary_rows
+                ]
+                st.dataframe(
+                    pd.DataFrame(display_rows),
+                    width="stretch",
+                    hide_index=True,
+                    height=min(len(display_rows) * 40 + 40, 450),
+                )
 
-            # --- Portfolio News Monitor ---
-            st.subheader("📰 News Affecting Your Holdings")
-            st.caption("Latest news about companies you own and why it matters to you")
-
-            with st.spinner("Scanning news for your holdings..."):
-                try:
-                    portfolio_news = fetch_portfolio_news_with_impact(
-                        holdings, max_per_stock=3
-                    )
-                    if portfolio_news:
-                        # Summary row: which stocks have concerning news
-                        bearish_stocks = [
-                            pn
-                            for pn in portfolio_news
-                            if pn["overall_sentiment"] == "bearish"
-                        ]
-                        bullish_stocks = [
-                            pn
-                            for pn in portfolio_news
-                            if pn["overall_sentiment"] == "bullish"
-                        ]
-
-                        if bearish_stocks or bullish_stocks:
-                            nc1, nc2 = st.columns(2)
-                            if bullish_stocks:
-                                with nc1:
-                                    names = ", ".join(
-                                        pn["holding"]["name"]
-                                        for pn in bullish_stocks[:3]
-                                    )
-                                    st.success(f"🟢 **Positive news for:** {names}")
-                            if bearish_stocks:
-                                with nc2:
-                                    names = ", ".join(
-                                        pn["holding"]["name"]
-                                        for pn in bearish_stocks[:3]
-                                    )
-                                    st.warning(f"🔴 **Concerning news for:** {names}")
-
-                        for pn in portfolio_news:
-                            h_info = pn["holding"]
-                            sentiment_icon = {
-                                "bullish": "🟢",
-                                "bearish": "🔴",
-                                "neutral": "⚪",
-                            }.get(pn["overall_sentiment"], "⚪")
-                            with st.expander(
-                                f"{sentiment_icon} **{h_info['name']}** — {pn['bull_count']} good, {pn['bear_count']} bad news"
-                            ):
-                                for ni in pn["news_items"]:
-                                    impact = ni["impact"]
-                                    render_news_card(
-                                        ni["title"],
-                                        impact["sentiment_label"],
-                                        impact["summary"],
-                                        impact["action"],
-                                    )
-                    else:
-                        st.info("No recent news found for your holdings.")
-                except Exception:
-                    st.info("Could not fetch portfolio news. Try again later.")
+                # Best/Worst quick callout
+                best = max(summary_rows, key=lambda x: x["_sort_today"])
+                worst = min(summary_rows, key=lambda x: x["_sort_today"])
+                bw1, bw2 = st.columns(2)
+                bw1.success(f"🏆 **Best today:** {best['Name']} ({best['Today']})")
+                bw2.error(f"📉 **Worst today:** {worst['Name']} ({worst['Today']})")
 
             st.divider()
 
@@ -611,3 +592,121 @@ def render(holdings):
                                 verify_stock_predictions()
                         except Exception:
                             pass
+
+            # ===== PORTFOLIO REBALANCING =====
+            st.divider()
+            st.subheader("⚖️ Portfolio Rebalancing")
+            st.caption(
+                "Compare your current allocation against target and get drift alerts"
+            )
+
+            with st.expander("🎯 Customise Target Allocation", expanded=False):
+                st.caption("Adjust target percentages (must sum to 100%)")
+                cols = st.columns(3)
+                custom_targets = {}
+                for i, (ac, config) in enumerate(DEFAULT_TARGET_ALLOCATION.items()):
+                    with cols[i % 3]:
+                        pct = st.number_input(
+                            config["label"],
+                            min_value=0.0,
+                            max_value=100.0,
+                            value=config["target_pct"],
+                            step=5.0,
+                            key=f"rebal_target_{ac}",
+                        )
+                        tol = st.number_input(
+                            f"Tolerance %",
+                            min_value=1.0,
+                            max_value=20.0,
+                            value=config["tolerance_pct"],
+                            step=1.0,
+                            key=f"rebal_tol_{ac}",
+                        )
+                        custom_targets[ac] = {
+                            "target_pct": pct,
+                            "tolerance_pct": tol,
+                            "label": config["label"],
+                        }
+
+                total_target = sum(t["target_pct"] for t in custom_targets.values())
+                if abs(total_target - 100.0) > 0.1:
+                    st.warning(
+                        f"Target allocation sums to {total_target}% — should be 100%"
+                    )
+
+            result = calculate_rebalancing(
+                holdings,
+                analysis_results=None,
+                targets=custom_targets,
+            )
+
+            if result:
+                if result["needs_rebalancing"]:
+                    st.error(f"⚠️ **Rebalancing needed** — {result['summary']}")
+                else:
+                    st.success(f"✅ **Portfolio is balanced** — {result['summary']}")
+
+                st.metric("Total Portfolio Value", f"₹{result['total_value']:,.0f}")
+
+                df_data = []
+                for a in result["allocations"]:
+                    action_icon = {
+                        "ADD": "🟢 Add",
+                        "REDUCE": "🔴 Reduce",
+                        "OK": "✅ OK",
+                    }.get(a["action"], a["action"])
+                    df_data.append(
+                        {
+                            "Asset Class": a["label"],
+                            "Current %": a["current_pct"],
+                            "Target %": a["target_pct"],
+                            "Drift %": a["drift_pct"],
+                            "Action": action_icon,
+                            "Amount (₹)": (
+                                f"₹{a['rebalance_amount']:,}"
+                                if a["action"] != "OK"
+                                else "—"
+                            ),
+                            "Holdings": ", ".join(a["holdings_in_class"][:5]) or "None",
+                        }
+                    )
+
+                df = pd.DataFrame(df_data)
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Drift %": st.column_config.NumberColumn(format="%.1f%%"),
+                        "Current %": st.column_config.NumberColumn(format="%.1f%%"),
+                        "Target %": st.column_config.NumberColumn(format="%.1f%%"),
+                    },
+                )
+
+                chart_data = pd.DataFrame(
+                    {
+                        "Asset Class": [a["label"] for a in result["allocations"]],
+                        "Current %": [a["current_pct"] for a in result["allocations"]],
+                        "Target %": [a["target_pct"] for a in result["allocations"]],
+                    }
+                ).set_index("Asset Class")
+                st.bar_chart(chart_data)
+
+                actions_needed = [
+                    a for a in result["allocations"] if a["action"] != "OK"
+                ]
+                if actions_needed:
+                    st.markdown("##### 📋 Suggested Actions")
+                    for a in actions_needed:
+                        if a["action"] == "REDUCE":
+                            st.markdown(
+                                f"🔴 **{a['label']}**: Over-allocated by {a['drift_pct']:+.1f}%. "
+                                f"Consider moving ~₹{a['rebalance_amount']:,} to under-allocated classes."
+                            )
+                        elif a["action"] == "ADD":
+                            st.markdown(
+                                f"🟢 **{a['label']}**: Under-allocated by {a['drift_pct']:+.1f}%. "
+                                f"Consider adding ~₹{a['rebalance_amount']:,} through SIP or lumpsum."
+                            )
+            else:
+                st.info("Unable to calculate rebalancing — check portfolio data.")

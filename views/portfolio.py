@@ -2,8 +2,12 @@ import streamlit as st
 import pandas as pd
 import json
 import io
+import logging
+import calendar
 from datetime import datetime
 import yfinance as yf
+
+logger = logging.getLogger(__name__)
 
 from analysis import (
     analyze_portfolio,
@@ -102,10 +106,29 @@ def render(holdings):
 
             # Per-holding P&L table
             with st.expander("📋 Per-Holding P&L", expanded=True):
+                # Sort options
+                sort_by = st.selectbox(
+                    "Sort by",
+                    ["P&L (₹)", "Return %", "Invested", "Daily Change"],
+                    index=0,
+                    key="pnl_sort",
+                )
+                sort_map = {
+                    "P&L (₹)": "pnl",
+                    "Return %": "pnl_pct",
+                    "Invested": "invested",
+                    "Daily Change": "daily_change_pct",
+                }
+                sorted_pnl = sorted(
+                    pnl_data["holdings_pnl"],
+                    key=lambda x: x.get(sort_map[sort_by], 0),
+                    reverse=True,
+                )
+
                 pnl_rows = []
                 # Build a lookup for tax info from holdings
                 holdings_by_name = {h["name"]: h for h in holdings}
-                for hp in pnl_data["holdings_pnl"]:
+                for hp in sorted_pnl:
                     pnl_sign = "🟢" if hp["pnl"] >= 0 else "🔴"
                     # Tax status from holdings data
                     h_match = holdings_by_name.get(hp["name"], {})
@@ -125,6 +148,11 @@ def render(holdings):
                             "Return": f"{hp['pnl_pct']:+.1f}%",
                             "Tax": tax_label,
                             "Today": f"{hp['daily_change_pct']:+.1f}%",
+                            "Weight": (
+                                f"{hp['current_value'] / pnl_data['total_current'] * 100:.1f}%"
+                                if pnl_data["total_current"] > 0
+                                else "—"
+                            ),
                         }
                     )
                 st.dataframe(pd.DataFrame(pnl_rows), width="stretch", hide_index=True)
@@ -247,7 +275,9 @@ def render(holdings):
                     if not sd.empty:
                         sensex_close = round(float(sd["Close"].iloc[-1]), 2)
                 except Exception:
-                    pass
+                    logger.debug(
+                        "Failed to fetch index data for snapshot", exc_info=True
+                    )
 
                 snapshot = {
                     "date": datetime.now().strftime("%Y-%m-%d"),
@@ -269,7 +299,7 @@ def render(holdings):
                 user_id = auth.get_user_id()
                 db.save_portfolio_snapshot(snapshot, user_id)
             except Exception:
-                pass
+                logger.warning("Failed to save portfolio snapshot", exc_info=True)
 
         # Load and display history
         try:
@@ -350,6 +380,7 @@ def render(holdings):
                     "Portfolio history will appear here after a few days of tracking. Check back tomorrow!"
                 )
         except Exception:
+            logger.warning("Failed to load portfolio history", exc_info=True)
             st.info("Portfolio history tracking will start from today.")
 
         st.divider()
@@ -553,10 +584,10 @@ def render(holdings):
         st.divider()
 
         # =====================================================================
-        # Export (CSV / JSON / PDF)
+        # Export (CSV / JSON / PDF / Excel)
         # =====================================================================
         st.subheader("📥 Export Data")
-        exp_cols = st.columns(3)
+        exp_cols = st.columns(4)
 
         with exp_cols[0]:
             if st.button("📄 Download PDF Report"):
@@ -622,3 +653,101 @@ def render(holdings):
                     file_name=f"portfolio_{datetime.now().strftime('%Y%m%d')}.json",
                     mime="application/json",
                 )
+
+        with exp_cols[3]:
+            if pnl_data:
+                try:
+                    xl_buffer = io.BytesIO()
+                    xl_rows = []
+                    for hp in pnl_data["holdings_pnl"]:
+                        h_match = {h["name"]: h for h in holdings}.get(hp["name"], {})
+                        xl_rows.append(
+                            {
+                                "Name": hp["name"],
+                                "Type": hp["type"],
+                                "Invested (₹)": hp["invested"],
+                                "Current Value (₹)": hp["current_value"],
+                                "P&L (₹)": hp["pnl"],
+                                "Return %": round(hp["pnl_pct"], 2),
+                                "Daily Change %": round(hp["daily_change_pct"], 2),
+                                "Tax Status": (
+                                    "LTCG"
+                                    if h_match.get("is_ltcg")
+                                    else (
+                                        "STCG"
+                                        if h_match.get("is_ltcg") is not None
+                                        else ""
+                                    )
+                                ),
+                            }
+                        )
+                    xl_df = pd.DataFrame(xl_rows)
+                    xl_df.to_excel(xl_buffer, index=False, engine="openpyxl")
+                    st.download_button(
+                        "📊 Download Excel",
+                        data=xl_buffer.getvalue(),
+                        file_name=f"portfolio_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                except Exception:
+                    st.caption("Excel export requires openpyxl")
+
+        st.divider()
+
+        # =====================================================================
+        # SIP Payment Tracker
+        # =====================================================================
+        sip_holdings = [h for h in holdings if h.get("sip_monthly", 0) > 0]
+        if sip_holdings:
+            st.subheader("🔄 SIP Tracker")
+            st.caption("Your active and paused SIPs at a glance")
+
+            sip_rows = []
+            total_sip_monthly = 0
+            for h in sip_holdings:
+                paused = is_sip_currently_paused(h)
+                status = "⏸️ Paused" if paused else "✅ Active"
+                sip_amt = h.get("sip_monthly", 0)
+                sip_date = h.get("sip_date", 0)
+                if not paused:
+                    total_sip_monthly += sip_amt
+
+                # Days until next SIP
+                today = datetime.now()
+                next_sip_day = sip_date if sip_date else 1
+                if today.day >= next_sip_day:
+                    # Next month
+                    if today.month == 12:
+                        next_month, next_year = 1, today.year + 1
+                    else:
+                        next_month, next_year = today.month + 1, today.year
+                    max_day = calendar.monthrange(next_year, next_month)[1]
+                    next_sip = datetime(
+                        next_year, next_month, min(next_sip_day, max_day)
+                    )
+                else:
+                    max_day = calendar.monthrange(today.year, today.month)[1]
+                    next_sip = datetime(
+                        today.year, today.month, min(next_sip_day, max_day)
+                    )
+                days_until = max((next_sip - today).days, 0)
+
+                sip_rows.append(
+                    {
+                        "Status": status,
+                        "Name": h["name"],
+                        "Monthly (₹)": f"₹{sip_amt:,.0f}",
+                        "SIP Date": f"{next_sip_day}th" if next_sip_day else "—",
+                        "Next In": f"{days_until} days" if not paused else "—",
+                        "Total Invested": f"₹{h['amount']:,.0f}",
+                    }
+                )
+
+            sp1, sp2, sp3 = st.columns(3)
+            sp1.metric(
+                "Active SIPs", f"{sum(1 for r in sip_rows if '✅' in r['Status'])}"
+            )
+            sp2.metric("Monthly Outflow", f"₹{total_sip_monthly:,.0f}")
+            sp3.metric("Annual SIP", f"₹{total_sip_monthly * 12:,.0f}")
+
+            st.dataframe(pd.DataFrame(sip_rows), hide_index=True, width="stretch")

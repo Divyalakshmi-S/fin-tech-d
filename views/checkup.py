@@ -18,7 +18,44 @@ def render(holdings):
     if "checkup_step" not in st.session_state:
         st.session_state["checkup_step"] = 0
     if "checkup_data" not in st.session_state:
-        st.session_state["checkup_data"] = {}
+        # Pre-fill from Budget if available
+        prefill = {}
+        budget = db.load_budget(user_id)
+        if budget:
+            if budget.get("income", 0) > 0:
+                prefill["monthly_income"] = budget["income"]
+            if budget.get("expenses", 0) > 0:
+                prefill["monthly_expenses"] = budget["expenses"]
+            if budget.get("investments", 0) > 0:
+                prefill["monthly_investments"] = budget["investments"]
+        # Pre-fill from Net Worth if available
+        nw = db.load_net_worth(user_id)
+        if nw:
+            if nw.get("bank_balance", 0) > 0:
+                prefill["bank_savings"] = nw["bank_balance"]
+            if nw.get("fd_amount", 0) > 0:
+                prefill["fd_rd"] = nw["fd_amount"]
+            ppf_nps_total = (
+                nw.get("ppf_balance", 0)
+                + nw.get("nps_balance", 0)
+                + nw.get("epf_balance", 0)
+            )
+            if ppf_nps_total > 0:
+                prefill["ppf_nps"] = ppf_nps_total
+            if nw.get("gold_physical_value", 0) > 0:
+                prefill["gold_value"] = nw["gold_physical_value"]
+            if nw.get("real_estate_value", 0) > 0:
+                prefill["real_estate"] = nw["real_estate_value"]
+            loan_total = (
+                nw.get("home_loan", 0)
+                + nw.get("car_loan", 0)
+                + nw.get("personal_loan", 0)
+                + nw.get("credit_card_debt", 0)
+                + nw.get("other_debt", 0)
+            )
+            if loan_total > 0:
+                prefill["total_loans"] = loan_total
+        st.session_state["checkup_data"] = prefill
 
     step = st.session_state["checkup_step"]
     data = st.session_state["checkup_data"]
@@ -87,32 +124,36 @@ def render(holdings):
     elif step == 1:
         st.subheader("💰 Income & Expenses")
 
+        budget = db.load_budget(user_id)
+        if budget and budget.get("income", 0) > 0:
+            st.caption("💡 Pre-filled from your **Budget** page. Adjust if needed.")
+
         data["monthly_income"] = st.number_input(
             "Monthly Income (₹)",
             min_value=0,
             step=10000,
-            value=data.get("monthly_income", 50000),
+            value=int(data.get("monthly_income", 50000)),
             key="chk_income",
         )
         data["monthly_expenses"] = st.number_input(
             "Monthly Expenses (₹)",
             min_value=0,
             step=5000,
-            value=data.get("monthly_expenses", 30000),
+            value=int(data.get("monthly_expenses", 30000)),
             key="chk_expenses",
         )
         data["monthly_emi"] = st.number_input(
             "Monthly EMIs (₹)",
             min_value=0,
             step=5000,
-            value=data.get("monthly_emi", 0),
+            value=int(data.get("monthly_emi", 0)),
             key="chk_emi",
         )
         data["monthly_investments"] = st.number_input(
             "Monthly Investments/SIPs (₹)",
             min_value=0,
             step=5000,
-            value=data.get("monthly_investments", 10000),
+            value=int(data.get("monthly_investments", 10000)),
             key="chk_inv",
         )
 
@@ -122,26 +163,33 @@ def render(holdings):
     elif step == 2:
         st.subheader("🏦 Savings & Investments")
 
+        nw = db.load_net_worth(user_id)
+        if nw and nw.get("bank_balance", 0) > 0:
+            st.caption("💡 Pre-filled from saved data. Adjust if needed.")
+
         data["bank_savings"] = st.number_input(
             "Bank Savings (₹)",
             min_value=0,
             step=50000,
-            value=data.get("bank_savings", 0),
+            value=int(data.get("bank_savings", 0)),
             key="chk_bank",
         )
         data["fd_rd"] = st.number_input(
             "FD/RD Total (₹)",
             min_value=0,
             step=50000,
-            value=data.get("fd_rd", 0),
+            value=int(data.get("fd_rd", 0)),
             key="chk_fd",
         )
         data["equity_value"] = st.number_input(
             "Stocks & Mutual Funds (₹)",
             min_value=0,
             step=50000,
-            value=data.get(
-                "equity_value", sum(h["amount"] for h in holdings) if holdings else 0
+            value=int(
+                data.get(
+                    "equity_value",
+                    sum(h["amount"] for h in holdings) if holdings else 0,
+                )
             ),
             key="chk_equity",
         )
@@ -149,28 +197,28 @@ def render(holdings):
             "PPF/NPS/EPF Total (₹)",
             min_value=0,
             step=50000,
-            value=data.get("ppf_nps", 0),
+            value=int(data.get("ppf_nps", 0)),
             key="chk_ppf",
         )
         data["gold_value"] = st.number_input(
             "Gold/Silver Holdings (₹)",
             min_value=0,
             step=10000,
-            value=data.get("gold_value", 0),
+            value=int(data.get("gold_value", 0)),
             key="chk_gold",
         )
         data["real_estate"] = st.number_input(
             "Real Estate Value (₹)",
             min_value=0,
             step=500000,
-            value=data.get("real_estate", 0),
+            value=int(data.get("real_estate", 0)),
             key="chk_re",
         )
         data["total_loans"] = st.number_input(
             "Total Outstanding Loans (₹)",
             min_value=0,
             step=100000,
-            value=data.get("total_loans", 0),
+            value=int(data.get("total_loans", 0)),
             key="chk_loans",
         )
 
@@ -190,7 +238,7 @@ def render(holdings):
                 "Life Insurance Cover (₹)",
                 min_value=0,
                 step=500000,
-                value=data.get("life_cover", 0),
+                value=int(data.get("life_cover", 0)),
                 key="chk_life_cover",
             )
         else:
@@ -206,7 +254,7 @@ def render(holdings):
                 "Health Insurance Cover (₹)",
                 min_value=0,
                 step=100000,
-                value=data.get("health_cover", 0),
+                value=int(data.get("health_cover", 0)),
                 key="chk_health_cover",
             )
         else:
@@ -383,7 +431,7 @@ def render(holdings):
 
         if not data.get("has_retirement_plan"):
             recommendations.append(
-                "⚠️ **Set a retirement target** — use the Retirement Calculator to see how much you need"
+                "⚠️ **Set a retirement target** — define a clear corpus goal and timeline"
             )
         if not data.get("has_tax_plan"):
             recommendations.append(

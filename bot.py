@@ -12,6 +12,13 @@ try:
 except ImportError:
     pass  # dotenv not needed in GitHub Actions
 
+try:
+    import truststore
+
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 # Set up Supabase service key for bot (bypasses RLS)
 # The bot uses SUPABASE_SERVICE_KEY instead of SUPABASE_KEY
 _svc_key = os.environ.get("SUPABASE_SERVICE_KEY", "")

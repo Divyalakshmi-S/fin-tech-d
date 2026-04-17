@@ -252,6 +252,7 @@ def render(holdings):
     st.subheader("💡 Insights")
 
     insights = []
+    budget = db.load_budget(user_id)
     if total_assets > 0:
         equity_pct = (portfolio_value / total_assets) * 100
         if equity_pct > 80:
@@ -283,7 +284,6 @@ def render(holdings):
             )
 
         emergency_fund_needed = 0
-        budget = db.load_budget(user_id)
         if budget and budget.get("expenses", 0) > 0:
             emergency_fund_needed = budget["expenses"] * 6
             liquid_assets = bank_balance + fd_amount
@@ -305,3 +305,9 @@ def render(holdings):
 
     for insight in insights:
         st.markdown(insight)
+
+    # Cross-links to detailed pages
+    st.divider()
+    st.info(
+        "🏖️ See **🏦 Retirement** for your Financial Freedom / FIRE progress.  \n📊 See **📁 My Portfolio** for diversification analysis."
+    )

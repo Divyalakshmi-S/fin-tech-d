@@ -10,7 +10,10 @@ Swap to any PostgreSQL host by changing SUPABASE_URL / SUPABASE_KEY.
 
 import os
 import json
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Connection
@@ -54,9 +57,28 @@ def _get_client():
         return None
 
 
+_db_available_cache = None  # None = not checked, True/False = result
+
+
 def is_db_available():
     """Check if Supabase is configured and reachable."""
-    return _get_client() is not None
+    global _db_available_cache
+    if _db_available_cache is not None:
+        return _db_available_cache
+
+    client = _get_client()
+    if client is None:
+        _db_available_cache = False
+        return False
+    # Verify actual connectivity (create_client succeeds even if network is down)
+    try:
+        client.table("portfolio").select("id").limit(1).execute()
+        _db_available_cache = True
+        return True
+    except Exception as e:
+        logger.warning("Supabase connectivity check failed: %s", e)
+        _db_available_cache = False
+        return False
 
 
 def get_service_client():
@@ -80,12 +102,15 @@ def get_service_client():
 # ---------------------------------------------------------------------------
 
 
-def _json_path(filename):
-    return os.path.join(os.path.dirname(__file__), "data", filename)
+def _json_path(filename, user_id=None):
+    base = os.path.join(os.path.dirname(__file__), "data")
+    if user_id:
+        base = os.path.join(base, str(user_id))
+    return os.path.join(base, filename)
 
 
-def _load_json(filename, default=None):
-    path = _json_path(filename)
+def _load_json(filename, default=None, user_id=None):
+    path = _json_path(filename, user_id=user_id)
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
@@ -93,8 +118,8 @@ def _load_json(filename, default=None):
         return default if default is not None else []
 
 
-def _save_json(filename, data):
-    path = _json_path(filename)
+def _save_json(filename, data, user_id=None):
+    path = _json_path(filename, user_id=user_id)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -120,7 +145,7 @@ def load_portfolio(user_id=None):
             if isinstance(r.get("sip_pause_periods"), str):
                 r["sip_pause_periods"] = json.loads(r["sip_pause_periods"])
         return rows
-    return _load_json("portfolio.json", [])
+    return _load_json("portfolio.json", [], user_id=user_id)
 
 
 def save_portfolio(rows, user_id=None):
@@ -142,7 +167,7 @@ def save_portfolio(rows, user_id=None):
                 r.pop("created_at", None)
             client.table("portfolio").insert(rows).execute()
         return
-    _save_json("portfolio.json", rows)
+    _save_json("portfolio.json", rows, user_id=user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -152,19 +177,28 @@ def save_portfolio(rows, user_id=None):
 
 def load_budget(user_id=None):
     """Load budget for a user. Returns dict."""
-    default = {"income": 0, "expenses": 0, "investments": 0}
+    default = {
+        "income": 0,
+        "expenses": 0,
+        "investments": 0,
+        "expense_categories": {},
+        "budget_items": [],
+    }
     client = _get_client()
     if client and user_id:
         resp = (
             client.table("budget")
-            .select("income, expenses, investments")
+            .select("income, expenses, investments, expense_categories, budget_items")
             .eq("user_id", user_id)
             .execute()
         )
         if resp.data:
-            return resp.data[0]
+            row = resp.data[0]
+            row.setdefault("expense_categories", {})
+            row.setdefault("budget_items", [])
+            return row
         return default
-    return _load_json("budget.json", default)
+    return _load_json("budget.json", default, user_id=user_id)
 
 
 def save_budget(data, user_id=None):
@@ -173,14 +207,16 @@ def save_budget(data, user_id=None):
     if client and user_id:
         row = {
             "user_id": user_id,
-            "income": data["income"],
-            "expenses": data["expenses"],
-            "investments": data["investments"],
+            "income": data.get("income", 0),
+            "expenses": data.get("expenses", 0),
+            "investments": data.get("investments", 0),
+            "expense_categories": data.get("expense_categories", {}),
+            "budget_items": data.get("budget_items", []),
             "updated_at": datetime.utcnow().isoformat(),
         }
         client.table("budget").upsert(row, on_conflict="user_id").execute()
         return
-    _save_json("budget.json", data)
+    _save_json("budget.json", data, user_id=user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +230,7 @@ def load_goals(user_id=None):
     if client and user_id:
         resp = client.table("goals").select("*").eq("user_id", user_id).execute()
         return resp.data or []
-    return _load_json("goals.json", [])
+    return _load_json("goals.json", [], user_id=user_id)
 
 
 def save_goal(goal, user_id=None):
@@ -215,12 +251,12 @@ def save_goal(goal, user_id=None):
         resp = client.table("goals").insert(row).execute()
         return resp.data[0]["id"] if resp.data else 0
     # JSON fallback
-    goals = _load_json("goals.json", [])
+    goals = _load_json("goals.json", [], user_id=user_id)
     goal["id"] = max((g.get("id", 0) for g in goals), default=0) + 1
     if "created_date" not in goal:
         goal["created_date"] = datetime.now().strftime("%Y-%m-%d")
     goals.append(goal)
-    _save_json("goals.json", goals)
+    _save_json("goals.json", goals, user_id=user_id)
     return goal["id"]
 
 
@@ -232,9 +268,9 @@ def delete_goal(goal_id, user_id=None):
             "user_id", user_id
         ).execute()
         return
-    goals = _load_json("goals.json", [])
+    goals = _load_json("goals.json", [], user_id=user_id)
     goals = [g for g in goals if g.get("id") != goal_id]
-    _save_json("goals.json", goals)
+    _save_json("goals.json", goals, user_id=user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -298,61 +334,6 @@ def update_predictions(table_name, predictions_list):
 
 
 # ---------------------------------------------------------------------------
-# Auth helpers (for Streamlit dashboard)
-# ---------------------------------------------------------------------------
-
-
-def sign_up(email, password):
-    """Register a new user. Returns (user, error)."""
-    client = _get_client()
-    if not client:
-        return None, "Database not configured"
-    try:
-        resp = client.auth.sign_up({"email": email, "password": password})
-        if resp.user:
-            return resp.user, None
-        return None, "Sign-up failed"
-    except Exception as e:
-        return None, str(e)
-
-
-def sign_in(email, password):
-    """Authenticate a user. Returns (session, error)."""
-    client = _get_client()
-    if not client:
-        return None, "Database not configured"
-    try:
-        resp = client.auth.sign_in_with_password({"email": email, "password": password})
-        if resp.session:
-            return resp.session, None
-        return None, "Invalid credentials"
-    except Exception as e:
-        return None, str(e)
-
-
-def sign_out():
-    """Sign out the current user."""
-    client = _get_client()
-    if client:
-        try:
-            client.auth.sign_out()
-        except Exception:
-            pass
-
-
-def get_user_from_session(access_token):
-    """Validate an access token and return user info."""
-    client = _get_client()
-    if not client:
-        return None
-    try:
-        resp = client.auth.get_user(access_token)
-        return resp.user if resp else None
-    except Exception:
-        return None
-
-
-# ---------------------------------------------------------------------------
 # Portfolio History (daily snapshots)
 # ---------------------------------------------------------------------------
 
@@ -369,12 +350,12 @@ def save_portfolio_snapshot(snapshot, user_id=None):
         ).execute()
         return
     # JSON fallback
-    history = _load_json("portfolio_history.json", [])
+    history = _load_json("portfolio_history.json", [], user_id=user_id)
     history = [h for h in history if h.get("date") != snapshot["date"]]
     history.append(snapshot)
     # Keep last 365 days
     history = sorted(history, key=lambda x: x["date"])[-365:]
-    _save_json("portfolio_history.json", history)
+    _save_json("portfolio_history.json", history, user_id=user_id)
 
 
 def load_portfolio_history(user_id=None, limit=365):
@@ -391,7 +372,7 @@ def load_portfolio_history(user_id=None, limit=365):
             query = query.eq("user_id", user_id)
         resp = query.execute()
         return resp.data or []
-    return _load_json("portfolio_history.json", [])[-limit:]
+    return _load_json("portfolio_history.json", [], user_id=user_id)[-limit:]
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +392,7 @@ def load_dividends(user_id=None):
             .execute()
         )
         return resp.data or []
-    return _load_json("dividends.json", [])
+    return _load_json("dividends.json", [], user_id=user_id)
 
 
 def save_dividend(dividend, user_id=None):
@@ -422,10 +403,10 @@ def save_dividend(dividend, user_id=None):
         row.pop("id", None)
         client.table("dividends").insert(row).execute()
         return
-    divs = _load_json("dividends.json", [])
+    divs = _load_json("dividends.json", [], user_id=user_id)
     dividend["id"] = max((d.get("id", 0) for d in divs), default=0) + 1
     divs.append(dividend)
-    _save_json("dividends.json", divs)
+    _save_json("dividends.json", divs, user_id=user_id)
 
 
 def delete_dividend(div_id, user_id=None):
@@ -436,9 +417,9 @@ def delete_dividend(div_id, user_id=None):
             "user_id", user_id
         ).execute()
         return
-    divs = _load_json("dividends.json", [])
+    divs = _load_json("dividends.json", [], user_id=user_id)
     divs = [d for d in divs if d.get("id") != div_id]
-    _save_json("dividends.json", divs)
+    _save_json("dividends.json", divs, user_id=user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +435,7 @@ def load_net_worth(user_id=None):
         if resp.data:
             return resp.data[0]
         return None
-    return _load_json("net_worth.json", None)
+    return _load_json("net_worth.json", None, user_id=user_id)
 
 
 def save_net_worth(data, user_id=None):
@@ -464,7 +445,7 @@ def save_net_worth(data, user_id=None):
         row = {**data, "user_id": user_id, "updated_at": datetime.utcnow().isoformat()}
         client.table("net_worth").upsert(row, on_conflict="user_id").execute()
         return
-    _save_json("net_worth.json", data)
+    _save_json("net_worth.json", data, user_id=user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +461,7 @@ def load_tax_planning(user_id=None):
         if resp.data:
             return resp.data[0]
         return None
-    return _load_json("tax_planning.json", None)
+    return _load_json("tax_planning.json", None, user_id=user_id)
 
 
 def save_tax_planning(data, user_id=None):
@@ -490,7 +471,7 @@ def save_tax_planning(data, user_id=None):
         row = {**data, "user_id": user_id, "updated_at": datetime.utcnow().isoformat()}
         client.table("tax_planning").upsert(row, on_conflict="user_id").execute()
         return
-    _save_json("tax_planning.json", data)
+    _save_json("tax_planning.json", data, user_id=user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +490,7 @@ def load_fixed_instruments(user_id=None):
             .execute()
         )
         return resp.data or []
-    return _load_json("fixed_instruments.json", [])
+    return _load_json("fixed_instruments.json", [], user_id=user_id)
 
 
 def save_fixed_instruments(instruments, user_id=None):
@@ -524,7 +505,7 @@ def save_fixed_instruments(instruments, user_id=None):
                 r.pop("created_at", None)
             client.table("fixed_instruments").insert(rows).execute()
         return
-    _save_json("fixed_instruments.json", instruments)
+    _save_json("fixed_instruments.json", instruments, user_id=user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +525,7 @@ def load_family_members(user_id=None):
             .execute()
         )
         return resp.data or []
-    return _load_json("family_members.json", [])
+    return _load_json("family_members.json", [], user_id=user_id)
 
 
 def save_family_member(member, user_id=None):
@@ -557,10 +538,11 @@ def save_family_member(member, user_id=None):
         resp = client.table("family_members").insert(row).execute()
         return resp.data[0]["id"] if resp.data else 0
     # JSON fallback
-    members = _load_json("family_members.json", [])
+    members = _load_json("family_members.json", [], user_id=user_id)
     member["id"] = max((m.get("id", 0) for m in members), default=0) + 1
+    member["owner_id"] = user_id
     members.append(member)
-    _save_json("family_members.json", members)
+    _save_json("family_members.json", members, user_id=user_id)
     return member["id"]
 
 
@@ -572,9 +554,9 @@ def delete_family_member(member_id, user_id=None):
             "owner_id", user_id
         ).execute()
         return
-    members = _load_json("family_members.json", [])
+    members = _load_json("family_members.json", [], user_id=user_id)
     members = [m for m in members if m.get("id") != member_id]
-    _save_json("family_members.json", members)
+    _save_json("family_members.json", members, user_id=user_id)
 
 
 def load_family_portfolio(member_id, user_id=None):
@@ -595,7 +577,7 @@ def load_family_portfolio(member_id, user_id=None):
                 r["sip_pause_periods"] = json.loads(r["sip_pause_periods"])
         return rows
     # JSON fallback: filter by member_id
-    all_rows = _load_json("family_portfolio.json", [])
+    all_rows = _load_json("family_portfolio.json", [], user_id=user_id)
     return [r for r in all_rows if r.get("member_id") == member_id]
 
 
@@ -616,9 +598,9 @@ def save_family_portfolio(rows, member_id, user_id=None):
             client.table("family_portfolio").insert(rows).execute()
         return
     # JSON fallback
-    all_rows = _load_json("family_portfolio.json", [])
+    all_rows = _load_json("family_portfolio.json", [], user_id=user_id)
     all_rows = [r for r in all_rows if r.get("member_id") != member_id]
     for r in rows:
         r["member_id"] = member_id
     all_rows.extend(rows)
-    _save_json("family_portfolio.json", all_rows)
+    _save_json("family_portfolio.json", all_rows, user_id=user_id)

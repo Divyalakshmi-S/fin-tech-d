@@ -33,10 +33,15 @@ Full deep-dive analysis:
 - **Overview**: Nifty, Sensex, gold/silver charts
 - **Gold & Silver**: Price trends, buy predictions (7-factor engine), self-learning from past predictions
 - **Portfolio**: All holdings with value, type breakdown, diversification score
-- **Holdings Analysis**: Per-stock RSI, MA chart, fundamentals, PE, news with impact analysis, buy/sell recommendation (8-factor engine)
+- **Holdings Analysis**: Per-stock RSI, MA chart, fundamentals, PE, news with impact analysis, buy/sell recommendation (8-factor engine), portfolio rebalancing with drift detection
 - **Market Scanner**: Top movers, "What Should I Buy?" with clear verdicts, "Sell & Replace" tool (pick a stock to sell → see what to buy with that money), sector heatmap
-- **News**: 4-category feed with sentiment
+- **News**: 4-category feed with sentiment and actionable allocation-based advice
+- **Goals**: Education planner, SIP calculator, goal tracking with portfolio alignment, asset allocation with no-fund-reuse
 - **Budget**: Income/expense tracker
+- **Family**: Family member profiles with combined portfolio view
+- **Financial Health**: Health scoring + guided checkup wizard
+- **Calculators**: Step-up SIP, Loan/EMI impact analysis
+- **Tax Planning**: Old vs New regime comparison, LTCG/STCG breakdown
 
 ---
 
@@ -51,7 +56,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Configure
-cp .env.example .env          # Fill in your Telegram/email credentials
+cp .env.example .env          # Fill in your Supabase, Telegram, and email credentials
 ```
 
 Your portfolio is managed through the dashboard UI — go to **⚙️ Manage Portfolio** to add your stocks and mutual funds.
@@ -93,6 +98,31 @@ The app automatically calculates:
 - **XIRR** — annualized returns using actual buy dates
 
 Data is stored in `data/portfolio.json` (auto-created).
+
+---
+
+## Database Setup (Supabase — free tier)
+
+The app uses **Supabase** for multi-user auth and cloud data storage. Without it, data is stored locally in JSON files (single-user mode).
+
+1. Create a project at [supabase.com](https://supabase.com) (free tier)
+2. Go to **SQL Editor** → paste and run the contents of `supabase_schema.sql`
+3. Go to **Settings → API** → copy your **Project URL** and **anon (public) key**
+4. For the bot (GitHub Actions), also copy the **service_role key** from the same page
+5. Add to your `.env`:
+   ```
+   SUPABASE_URL=https://your-project.supabase.co
+   SUPABASE_KEY=your_anon_key
+   SUPABASE_SERVICE_KEY=your_service_role_key
+   ```
+6. For Streamlit Cloud, add these to `.streamlit/secrets.toml`:
+   ```toml
+   [supabase]
+   SUPABASE_URL = "https://your-project.supabase.co"
+   SUPABASE_KEY = "your_anon_key"
+   ```
+
+> **Without Supabase**: The app still works in single-user mode using local JSON files in `data/`. Auth is skipped, and you get full functionality as a personal tool.
 
 ---
 
@@ -145,18 +175,41 @@ Data is stored in `data/portfolio.json` (auto-created).
 ## Project Structure
 
 ```
-├── analysis.py        # Core engine — all market analysis, predictions, scanners
-├── dashboard.py       # Streamlit dashboard (7 pages)
-├── bot.py             # Daily WhatsApp bot (concise alerts only)
-├── weekly_email.py    # Weekly HTML email (key highlights only)
-├── requirements.txt   # Python dependencies
-├── .env.example       # Template for credentials
-├── .github/workflows/
-│   └── daily.yml      # GitHub Actions automation
-└── data/
-    ├── portfolio.json           # Your holdings (managed via UI)
-    ├── gold_predictions.json    # Prediction history (auto-generated)
-    └── silver_predictions.json  # Prediction history (auto-generated)
+├── analysis/
+│   ├── __init__.py            # Public API re-exports
+│   ├── _core.py               # Core engine — analysis, predictions, scanners (6600+ lines)
+│   ├── _technicals.py         # Technical indicators (RSI, MACD, Bollinger, ATR, etc.)
+│   └── _data_sources.py       # Multi-source price fetcher (yfinance → NSE → BSE → cache)
+├── views/
+│   ├── overview.py            # Market overview (Nifty, Sensex, gold, silver)
+│   ├── gold_silver.py         # Gold/Silver trends, 7-factor predictions
+│   ├── portfolio.py           # Portfolio tracker with P&L, tax status, history
+│   ├── holdings.py            # Per-stock deep analysis, 8-factor signals, rebalancing
+│   ├── scanner.py             # Market scanner, "What to Buy", "Sell & Replace"
+│   ├── news.py                # 4-category news with sentiment
+│   ├── goals.py               # Financial goals, education planner, goal tracking & allocation
+│   ├── budget.py              # Income/expense tracker
+│   ├── tax_planning.py        # Old vs New regime comparison, LTCG/STCG
+│   ├── calculators.py         # Step-up SIP, Loan/EMI impact calculators
+│   ├── family.py              # Family member profiles + combined portfolio
+│   ├── financial_health.py    # Financial health scoring
+│   ├── checkup.py             # Health checkup wizard
+│   ├── predictions.py         # Prediction accuracy scorecard
+│   ├── learn.py               # Educational content & glossary
+│   └── manage.py              # Add/edit/delete portfolio holdings
+├── dashboard.py               # Streamlit dashboard (16 pages)
+├── bot.py                     # Daily Telegram bot (market alerts)
+├── weekly_email.py            # Weekly HTML email recap
+├── auth.py                    # Supabase auth with guest fallback
+├── db.py                      # Database layer (Supabase + per-user JSON fallback)
+├── ui_helpers.py              # UI components, PDF export, disclaimers
+├── supabase_schema.sql        # Full database schema with RLS policies
+├── requirements.txt           # Python dependencies
+├── .env.example               # Template for all credentials
+└── data/                      # Local data (gitignored, per-user isolation)
+    ├── portfolio.json
+    ├── gold_predictions.json
+    └── silver_predictions.json
 ```
 
 ---

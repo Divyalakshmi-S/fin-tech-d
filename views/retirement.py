@@ -6,6 +6,7 @@ import numpy as np
 from datetime import datetime
 
 import db
+import auth
 
 
 # ---------------------------------------------------------------------------
@@ -119,11 +120,9 @@ def render(holdings):
 
     user_id = None
     try:
-        import auth
-
         user_id = auth.get_user_id()
     except Exception:
-        pass
+        pass  # auth unavailable in headless/bot mode
 
     tabs = st.tabs(
         [
@@ -387,6 +386,12 @@ def render(holdings):
         instruments = db.load_fixed_instruments(user_id)
         net_worth_data = db.load_net_worth(user_id) or {}
 
+        # Load budget for FIRE calculation
+        budget_data = db.load_budget(user_id)
+        budget_expenses = budget_data.get("expenses", 0)
+        budget_investments = budget_data.get("investments", 0)
+        budget_income = budget_data.get("income", 0)
+
         # Aggregate from instruments + net worth
         epf_total = net_worth_data.get("epf_balance", 0)
         ppf_total = net_worth_data.get("ppf_balance", 0)
@@ -405,9 +410,9 @@ def render(holdings):
 
         total_retirement = epf_total + ppf_total + nps_total
         mf_equity = sum(
-            h["holding"].get("amount", 0)
+            h.get("amount", 0)
             for h in (holdings or [])
-            if h["holding"].get("type") == "mutual_fund"
+            if h.get("type") == "mutual_fund"
         )
 
         col1, col2, col3, col4 = st.columns(4)
@@ -416,7 +421,7 @@ def render(holdings):
         col3.metric("NPS", f"₹{nps_total:,.0f}")
         col4.metric("📊 Total Retirement", f"₹{total_retirement:,.0f}")
 
-        if total_retirement > 0:
+        if total_retirement > 0 or mf_equity > 0 or (holdings and len(holdings) > 0):
             pie_data = {"EPF": epf_total, "PPF": ppf_total, "NPS": nps_total}
             if mf_equity > 0:
                 pie_data["Equity MFs"] = mf_equity
@@ -431,41 +436,274 @@ def render(holdings):
             if not df.empty:
                 st.bar_chart(df.set_index("Instrument"))
 
-            # Quick FIRE check
+            # === Comprehensive Retirement Planner ===
             st.divider()
-            monthly_expenses = st.number_input(
+            st.markdown("##### 🔥 Retirement & FIRE Planner")
+
+            # --- Personal Inputs ---
+            p1, p2, p3 = st.columns(3)
+            current_age = p1.number_input(
+                "Current Age", min_value=18, max_value=70, value=30, key="uv_age"
+            )
+            retirement_age = p2.number_input(
+                "Retirement Age",
+                min_value=current_age + 1,
+                max_value=80,
+                value=60,
+                key="uv_ret_age",
+            )
+            life_expectancy = p3.number_input(
+                "Life Expectancy",
+                min_value=retirement_age + 1,
+                max_value=100,
+                value=85,
+                key="uv_life",
+            )
+
+            # --- Expense & Rate Inputs ---
+            if budget_expenses > 0:
+                st.caption(
+                    f"📋 Monthly expenses pre-filled from your **Budget Plan**: ₹{budget_expenses:,}"
+                )
+
+            e1, e2, e3 = st.columns(3)
+            monthly_expenses = e1.number_input(
                 "Monthly Expenses (₹)",
                 min_value=0,
-                value=50000,
+                value=budget_expenses if budget_expenses > 0 else 50000,
                 step=5000,
-                key="fire_expenses",
+                key="uv_expenses",
+                help="Pre-filled from Budget" if budget_expenses > 0 else None,
             )
-            annual_expenses = monthly_expenses * 12
-            fire_corpus = annual_expenses * 25  # 4% rule
+            inflation_rate = e2.number_input(
+                "Inflation Rate (%)",
+                min_value=1.0,
+                max_value=15.0,
+                value=6.0,
+                step=0.5,
+                key="uv_inflation",
+            )
+            post_ret_return = e3.number_input(
+                "Post-Retirement Return (%)",
+                min_value=1.0,
+                max_value=15.0,
+                value=7.0,
+                step=0.5,
+                key="uv_post_ret",
+                help="Expected return on corpus after retirement",
+            )
 
-            grand_total = total_retirement + mf_equity
-            progress = (
-                min(100, round((grand_total / fire_corpus) * 100, 1))
-                if fire_corpus > 0
+            # --- Savings & SIP Inputs ---
+            # Auto-calculate current savings from instruments + holdings
+            stock_equity = sum(
+                h.get("amount", 0) for h in (holdings or []) if h.get("type") == "stock"
+            )
+            grand_total_now = total_retirement + mf_equity + stock_equity
+
+            # Detect actual SIPs from portfolio
+            active_sips = [h for h in (holdings or []) if h.get("sip_monthly", 0) > 0]
+            portfolio_sip_total = sum(h["sip_monthly"] for h in active_sips)
+
+            # Show portfolio breakdown
+            if grand_total_now > 0:
+                with st.expander(
+                    f"📋 Your savings breakdown: ₹{grand_total_now:,.0f} total",
+                    expanded=False,
+                ):
+                    if epf_total > 0:
+                        st.caption(f"• **EPF** — ₹{epf_total:,.0f}")
+                    if ppf_total > 0:
+                        st.caption(f"• **PPF** — ₹{ppf_total:,.0f}")
+                    if nps_total > 0:
+                        st.caption(f"• **NPS** — ₹{nps_total:,.0f}")
+                    if mf_equity > 0:
+                        st.caption(f"• **Equity MFs** — ₹{mf_equity:,.0f}")
+                    if stock_equity > 0:
+                        st.caption(f"• **Stocks** — ₹{stock_equity:,.0f}")
+                    if active_sips:
+                        st.caption(
+                            f"**Active SIPs:** {len(active_sips)} totalling ₹{portfolio_sip_total:,.0f}/mo"
+                        )
+                        for h in active_sips:
+                            st.caption(f"  ↳ {h['name']} — ₹{h['sip_monthly']:,.0f}/mo")
+
+            # Choose best SIP default: portfolio SIPs > budget investments > 20000
+            sip_default = 20000
+            sip_source = None
+            if portfolio_sip_total > 0:
+                sip_default = int(portfolio_sip_total)
+                sip_source = "portfolio SIPs"
+            elif budget_investments > 0:
+                sip_default = int(budget_investments)
+                sip_source = "Budget"
+
+            s1, s2, s3 = st.columns(3)
+            current_savings = s1.number_input(
+                "Total Current Savings (₹)",
+                min_value=0,
+                step=100000,
+                value=int(grand_total_now),
+                key="uv_savings",
+                help="Auto-filled from your instruments + portfolio",
+            )
+            pre_ret_return = s2.number_input(
+                "Pre-Retirement Return (%)",
+                min_value=1.0,
+                max_value=20.0,
+                value=12.0,
+                step=0.5,
+                key="uv_pre_ret",
+            )
+            monthly_sip = s3.number_input(
+                "Current Monthly SIP (₹)",
+                min_value=0,
+                step=5000,
+                value=sip_default,
+                key="uv_sip",
+                help=f"Pre-filled from {sip_source}" if sip_source else None,
+            )
+
+            # --- Calculations ---
+            years_to_retire = retirement_age - current_age
+            years_in_retirement = life_expectancy - retirement_age
+
+            # Future monthly expenses at retirement (inflation-adjusted)
+            future_monthly_exp = monthly_expenses * (
+                (1 + inflation_rate / 100) ** years_to_retire
+            )
+            future_annual_exp = future_monthly_exp * 12
+
+            # Corpus needed using real return (post-retirement return minus inflation)
+            real_return = (
+                (1 + post_ret_return / 100) / (1 + inflation_rate / 100) - 1
+            ) * 100
+            if real_return > 0:
+                corpus_needed = future_annual_exp * (
+                    (1 - (1 + real_return / 100) ** (-years_in_retirement))
+                    / (real_return / 100)
+                )
+            else:
+                corpus_needed = future_annual_exp * years_in_retirement
+
+            # Projected corpus from current savings + SIP
+            r_pre = pre_ret_return / 100 / 12
+            n_months = years_to_retire * 12
+            future_savings = current_savings * ((1 + r_pre) ** n_months)
+            if r_pre > 0:
+                future_sip = (
+                    monthly_sip * (((1 + r_pre) ** n_months - 1) / r_pre) * (1 + r_pre)
+                )
+            else:
+                future_sip = monthly_sip * n_months
+            projected_corpus = future_savings + future_sip
+
+            shortfall = max(corpus_needed - projected_corpus, 0)
+            surplus = max(projected_corpus - corpus_needed, 0)
+
+            # FIRE number (simple 25x today's expenses)
+            fire_number = monthly_expenses * 12 * 25
+
+            # --- Results Display ---
+            st.divider()
+
+            corpus_color = "#27ae60" if projected_corpus >= corpus_needed else "#e74c3c"
+            st.markdown(
+                f"""<div style="background: linear-gradient(135deg, {corpus_color}22, {corpus_color}11);
+                border-left: 5px solid {corpus_color}; border-radius: 10px; padding: 20px; margin: 10px 0;">
+                <h3 style="margin:0;">🏖️ Retirement Corpus Needed: ₹{corpus_needed:,.0f}</h3>
+                <p style="font-size: 1.1em; margin: 8px 0;">Your projected corpus: <strong style="color: {corpus_color};">₹{projected_corpus:,.0f}</strong></p>
+                <p style="margin: 0; opacity: 0.8;">Monthly expenses at retirement: ₹{future_monthly_exp:,.0f}/month (today's ₹{monthly_expenses:,.0f} after {inflation_rate}% inflation)</p>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+            rr1, rr2, rr3, rr4 = st.columns(4)
+            rr1.metric("Years to Retire", f"{years_to_retire}")
+            rr2.metric("Corpus Needed", f"₹{corpus_needed / 10000000:.2f} Cr")
+            rr3.metric("Projected Corpus", f"₹{projected_corpus / 10000000:.2f} Cr")
+            if shortfall > 0:
+                rr4.metric("Shortfall", f"₹{shortfall:,.0f}")
+            else:
+                rr4.metric("Surplus", f"₹{surplus:,.0f}")
+
+            if shortfall > 0:
+                # Calculate extra SIP needed
+                if r_pre > 0 and n_months > 0:
+                    extra_sip = shortfall / (
+                        (((1 + r_pre) ** n_months - 1) / r_pre) * (1 + r_pre)
+                    )
+                else:
+                    extra_sip = shortfall / n_months if n_months > 0 else 0
+                st.warning(
+                    f"⚠️ You need an additional **₹{extra_sip:,.0f}/month** SIP to bridge the gap. "
+                    f"Total required: ₹{monthly_sip + extra_sip:,.0f}/month."
+                )
+            else:
+                early_years = (
+                    int(surplus / future_annual_exp) if future_annual_exp > 0 else 0
+                )
+                st.success(
+                    f"✅ You're on track for retirement! You can even retire "
+                    f"**{max(0, years_to_retire - early_years):.0f} years earlier** if you maintain this pace."
+                )
+
+            # FIRE number section
+            st.divider()
+            st.markdown("##### 🔥 FIRE Number (Financial Independence)")
+            fire_inflation_adjusted = fire_number * (
+                (1 + inflation_rate / 100) ** years_to_retire
+            )
+            f1, f2, f3 = st.columns(3)
+            f1.metric("FIRE Corpus (25× annual)", f"₹{fire_number:,.0f}")
+            f2.metric(
+                f"Inflation-adjusted (age {retirement_age})",
+                f"₹{fire_inflation_adjusted:,.0f}",
+            )
+            fire_progress = (
+                min(100, round((grand_total_now / fire_number) * 100, 1))
+                if fire_number > 0
                 else 0
             )
+            f3.metric("Current FIRE Progress", f"{fire_progress}%")
 
-            st.progress(progress / 100)
-            st.metric(
-                "FIRE Progress",
-                f"{progress}%",
-                delta=f"₹{fire_corpus - grand_total:,.0f} remaining",
+            st.progress(min(fire_progress / 100, 1.0))
+
+            # Growth projection chart
+            st.divider()
+            st.markdown("##### 📊 Corpus Growth Projection")
+            years_range = list(range(1, years_to_retire + 1))
+            corpus_series = []
+            for y in years_range:
+                m = y * 12
+                fv_s = current_savings * ((1 + r_pre) ** m)
+                if r_pre > 0:
+                    fv_sip = (
+                        monthly_sip * (((1 + r_pre) ** m - 1) / r_pre) * (1 + r_pre)
+                    )
+                else:
+                    fv_sip = monthly_sip * m
+                corpus_series.append(fv_s + fv_sip)
+
+            chart_df = pd.DataFrame(
+                {
+                    "Your Corpus": corpus_series,
+                    "Target Corpus": [corpus_needed] * len(years_range),
+                },
+                index=[f"Age {current_age + y}" for y in years_range],
             )
+            chart_step = max(1, len(years_range) // 15)
+            st.line_chart(chart_df.iloc[::chart_step], height=300)
 
-            if progress >= 100:
-                st.success(
-                    "🎉 You've crossed the FIRE number! You may have enough to retire early."
-                )
-            elif progress >= 70:
-                st.info("💪 Good progress — stay the course.")
-            else:
-                st.warning(
-                    f"📈 Target: ₹{fire_corpus:,.0f} (25× annual expenses). Keep investing!"
+            # Budget context
+            if budget_income > 0 and budget_expenses > 0:
+                st.divider()
+                st.markdown("##### 💰 Your Budget Context")
+                b1, b2, b3 = st.columns(3)
+                b1.metric("Monthly Income", f"₹{budget_income:,}")
+                b2.metric("Monthly Expenses", f"₹{budget_expenses:,}")
+                b3.metric(
+                    "Monthly Investments",
+                    f"₹{budget_investments:,}" if budget_investments > 0 else "—",
                 )
         else:
             st.info(

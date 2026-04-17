@@ -50,8 +50,8 @@ def render(holdings):
 
     # --- Calculate rebalancing ---
     result = calculate_rebalancing(
-        [r["holding"] for r in holdings],
         holdings,
+        analysis_results=None,
         targets=custom_targets,
     )
 

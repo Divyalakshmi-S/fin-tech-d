@@ -1,137 +1,147 @@
 """
-Streamlit authentication UI using Supabase Auth.
+Authentication module — thin wrapper around Streamlit's built-in auth.
 
-Renders login/signup forms and manages session state.
-When DB is not configured, allows guest access with local JSON fallback.
+On Streamlit Cloud: uses st.login() / st.user for Google/GitHub SSO.
+Locally (no auth configured): auto-enters guest mode with local JSON storage.
+
+All views call auth.get_user_id() — returns the user's email as their ID
+(used to key data in Supabase), or None for guest mode.
 """
 
 import streamlit as st
-import db
-
-
-def _init_session():
-    """Ensure session state keys exist."""
-    if "auth_token" not in st.session_state:
-        st.session_state.auth_token = None
-    if "user_id" not in st.session_state:
-        st.session_state.user_id = None
-    if "user_email" not in st.session_state:
-        st.session_state.user_email = None
 
 
 def get_user_id():
-    """Return the current user's UUID, or None if not logged in."""
-    _init_session()
-    return st.session_state.user_id
+    """Return the current user's email (used as DB key), or None for guest."""
+    user = st.user
+    if user and user.get("is_logged_in"):
+        return user.get("email")
+    if st.session_state.get("_guest_mode"):
+        return None
+    return None
 
 
 def is_logged_in():
-    """Check if the user is authenticated."""
-    _init_session()
-    return st.session_state.user_id is not None
-
-
-def logout():
-    """Clear session and sign out."""
-    db.sign_out()
-    st.session_state.auth_token = None
-    st.session_state.user_id = None
-    st.session_state.user_email = None
+    """Check if the user is authenticated or in guest mode."""
+    user = st.user
+    if user and user.get("is_logged_in"):
+        return True
+    return st.session_state.get("_guest_mode", False)
 
 
 def render_auth_page():
-    """Render login/signup page. Returns True if user is authenticated."""
-    _init_session()
+    """Gate the app behind auth. Returns True if user can proceed."""
+    user = st.user
 
-    # If DB isn't configured, skip auth (local dev / bot mode)
-    if not db.is_db_available():
-        st.session_state.user_id = None
-        st.session_state.user_email = "local"
+    # Already logged in via Streamlit auth
+    if user and user.get("is_logged_in"):
         return True
 
-    # Already logged in — validate token
-    if st.session_state.auth_token:
-        user = db.get_user_from_session(st.session_state.auth_token)
-        if user:
-            st.session_state.user_id = user.id
-            st.session_state.user_email = user.email
-            return True
-        else:
-            # Token expired
-            logout()
+    # Already in guest mode
+    if st.session_state.get("_guest_mode"):
+        return True
 
-    # --- Auth UI ---
+    # --- Show login page ---
     st.markdown(
         """
-        <div style="text-align: center; padding: 2rem 0 1rem 0;">
-            <h1>📊 Finance Dashboard</h1>
-            <p style="color: #888;">Sign in to access your personal portfolio & analysis</p>
+        <style>
+            /* Hide sidebar and header on login page */
+            section[data-testid="stSidebar"] { display: none; }
+            header[data-testid="stHeader"] { display: none; }
+            footer { display: none; }
+
+            .block-container {
+                padding: 0 !important;
+                max-width: 480px !important;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                min-height: 100vh;
+            }
+
+            .login-card {
+                background: linear-gradient(135deg, #1e1e2e 0%, #2d2d44 100%);
+                border: 1px solid #3d3d5c;
+                border-radius: 20px;
+                padding: 2rem 2rem 1rem;
+                width: 100%;
+                max-width: 400px;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+                text-align: center;
+                margin: auto;
+                margin-bottom: 1.5rem;
+            }
+            @media (prefers-color-scheme: light) {
+                .login-card {
+                    background: linear-gradient(135deg, #ffffff 0%, #f0f0f5 100%);
+                    border: 1px solid #d0d0e0;
+                    box-shadow: 0 8px 32px rgba(0,0,0,0.08);
+                }
+                .login-card .subtitle { color: #606080 !important; }
+                .login-card .features span { color: #606080 !important; }
+            }
+            .login-card .logo { font-size: 3rem; margin-bottom: 0.3rem; }
+            .login-card h1 {
+                font-size: 1.6rem;
+                font-weight: 700;
+                margin: 0 0 0.2rem 0;
+                border: none !important;
+                padding: 0 !important;
+            }
+            .login-card .subtitle {
+                color: #a0a0b8;
+                font-size: 0.9rem;
+                margin-bottom: 1rem;
+            }
+            .login-card .features {
+                display: flex;
+                justify-content: center;
+                gap: 1rem;
+                margin-bottom: 0.5rem;
+                flex-wrap: wrap;
+            }
+            .login-card .features span {
+                font-size: 0.78rem;
+                color: #a0a0b8;
+            }
+        </style>
+
+        <div class="login-card">
+            <div class="logo">📊</div>
+            <h1>Finance Dashboard</h1>
+            <p class="subtitle">Track your portfolio, plan your future</p>
+            <div class="features">
+                <span>📁 Portfolio</span>
+                <span>🪙 Gold & Silver</span>
+                <span>🎯 Goals</span>
+                <span>📋 Tax</span>
+                <span>🏦 Retirement</span>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    tab_login, tab_signup = st.tabs(["🔑 Login", "📝 Sign Up"])
-
-    with tab_login:
-        with st.form("login_form"):
-            email = st.text_input("Email", key="login_email")
-            password = st.text_input("Password", type="password", key="login_pwd")
-            submitted = st.form_submit_button("Login", use_container_width=True)
-
-            if submitted:
-                if not email or not password:
-                    st.error("Please enter email and password")
-                else:
-                    session, error = db.sign_in(email, password)
-                    if session:
-                        st.session_state.auth_token = session.access_token
-                        st.session_state.user_id = session.user.id
-                        st.session_state.user_email = session.user.email
-                        st.rerun()
-                    else:
-                        st.error(f"Login failed: {error}")
-
-    with tab_signup:
-        with st.form("signup_form"):
-            new_email = st.text_input("Email", key="signup_email")
-            new_password = st.text_input(
-                "Password",
-                type="password",
-                key="signup_pwd",
-                help="Minimum 6 characters",
-            )
-            confirm_password = st.text_input(
-                "Confirm Password", type="password", key="signup_confirm"
-            )
-            signed_up = st.form_submit_button(
-                "Create Account", use_container_width=True
-            )
-
-            if signed_up:
-                if not new_email or not new_password:
-                    st.error("Please fill in all fields")
-                elif len(new_password) < 6:
-                    st.error("Password must be at least 6 characters")
-                elif new_password != confirm_password:
-                    st.error("Passwords do not match")
-                else:
-                    user, error = db.sign_up(new_email, new_password)
-                    if user:
-                        st.success(
-                            "Account created! Please check your email to confirm, then log in."
-                        )
-                    else:
-                        st.error(f"Sign-up failed: {error}")
+    if st.button("🔑  Sign in with Google", use_container_width=True, type="primary"):
+        st.login("google")
+    if st.button("👤  Continue as Guest", use_container_width=True):
+        st.session_state["_guest_mode"] = True
+        st.rerun()
 
     return False
 
 
 def render_sidebar_user():
     """Show user info and logout button in the sidebar."""
-    _init_session()
-    if st.session_state.user_email and st.session_state.user_email != "local":
-        st.sidebar.markdown(f"👤 **{st.session_state.user_email}**")
+    user = st.user
+    if user and user.get("is_logged_in"):
+        email = user.get("email", "")
+        name = user.get("name", email)
+        st.sidebar.markdown(f"👤 **{name}**")
         if st.sidebar.button("🚪 Logout", use_container_width=True):
-            logout()
+            st.logout()
             st.rerun()
+    elif st.session_state.get("_guest_mode"):
+        st.sidebar.markdown("👤 **Guest**")
+        st.sidebar.caption("Data saved locally only")

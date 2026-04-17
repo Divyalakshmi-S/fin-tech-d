@@ -16,7 +16,9 @@ from analysis import (
 import yfinance as yf
 
 
-PORTFOLIO_PATH = "data/portfolio.json"
+def _portfolio_path(user_id=None):
+    """Get user-scoped portfolio JSON path."""
+    return db._json_path("portfolio.json", user_id=user_id)
 
 
 def _months_between(start_date, end_date):
@@ -34,7 +36,7 @@ def _fetch_current_prices(tickers_tuple):
             if not hist.empty:
                 prices[t] = round(hist["Close"].iloc[-1], 2)
         except Exception:
-            pass
+            pass  # expected: network timeout or delisted ticker
     return prices
 
 
@@ -45,11 +47,12 @@ def _save_portfolio(rows):
         db.save_portfolio(rows, user_id)
         st.cache_data.clear()
         return
-    os.makedirs(os.path.dirname(PORTFOLIO_PATH), exist_ok=True)
-    tmp_path = PORTFOLIO_PATH + ".tmp"
+    path = _portfolio_path(user_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(rows, f, indent=2, default=str)
-    os.replace(tmp_path, PORTFOLIO_PATH)
+    os.replace(tmp_path, path)
     st.cache_data.clear()
 
 
@@ -104,8 +107,9 @@ def _load_raw_portfolio():
     user_id = auth.get_user_id()
     if db.is_db_available() and user_id:
         return db.load_portfolio(user_id)
+    path = _portfolio_path(user_id)
     try:
-        with open(PORTFOLIO_PATH, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
@@ -820,5 +824,3 @@ def _parse_row_smart(row, mapped):
         "type": asset_type,
         "note": note,
     }
-
-

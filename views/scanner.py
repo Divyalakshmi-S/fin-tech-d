@@ -1,13 +1,14 @@
 import streamlit as st
 import pandas as pd
+import yfinance as yf
 
 from analysis import (
     scan_top_movers,
     scan_oversold_opportunities,
     scan_sector_performance,
     suggest_stock_swaps,
-    load_portfolio_extended,
     save_scanner_suggestion,
+    auto_resolve_ticker,
 )
 
 
@@ -31,9 +32,9 @@ def _cached_scan_sectors():
 
 @st.fragment()
 def _top_movers_fragment():
-    """Fragment — only this section re-runs when the scan button is clicked."""
+    """Fragment — top movers section."""
     st.caption("⏱️ **Short-term** — based on today's price change vs yesterday")
-    if st.button("🔍 Scan Top Movers", key="scan_movers"):
+    with st.spinner("Scanning top movers..."):
         try:
             gainers, losers = _cached_scan_top_movers(top_n=5)
 
@@ -105,9 +106,9 @@ def _top_movers_fragment():
 
 @st.fragment()
 def _cheap_stocks_fragment(holdings):
-    """Fragment — oversold opportunities scan re-runs independently."""
+    """Fragment — oversold opportunities scan."""
     st.caption("Stocks that have fallen significantly and could be good buys")
-    if st.button("🔍 Find Cheap Stocks", key="scan_cheap"):
+    with st.spinner("Scanning for cheap stocks..."):
         try:
             opps = _cached_scan_oversold()
             if opps:
@@ -237,14 +238,14 @@ def _cheap_stocks_fragment(holdings):
 
 
 @st.fragment()
-def _sell_replace_fragment():
+def _sell_replace_fragment(holdings):
     """Fragment — sell & replace section re-runs independently."""
     st.caption("Want to sell a stock? See what you could buy instead with that money.")
 
     try:
-        swap_holdings = load_portfolio_extended()
+        swap_holdings = holdings or []
         stock_holdings = [
-            h for h in swap_holdings if h["type"] == "stock" and h["ticker"]
+            h for h in swap_holdings if h["type"] == "stock" and h.get("ticker")
         ]
 
         if stock_holdings:
@@ -341,9 +342,9 @@ def _sell_replace_fragment():
 
 @st.fragment()
 def _sector_heatmap_fragment():
-    """Fragment — sector scan re-runs independently."""
+    """Fragment — sector scan."""
     st.caption("⏱️ **Short-term** — today's average change across stocks in each sector")
-    if st.button("🔍 Scan Sectors", key="scan_sectors"):
+    with st.spinner("Scanning sectors..."):
         try:
             sector_perf = _cached_scan_sectors()
             if sector_perf:
@@ -398,15 +399,134 @@ def _sector_heatmap_fragment():
             st.warning(f"Error: {e}")
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_watchlist_data(tickers_tuple):
+    """Fetch live data for watchlist tickers."""
+    results = []
+    for ticker in tickers_tuple:
+        try:
+            t = yf.Ticker(ticker)
+            hist = t.history(period="5d")
+            if hist.empty or len(hist) < 2:
+                continue
+            price = round(hist["Close"].iloc[-1], 2)
+            prev = round(hist["Close"].iloc[-2], 2)
+            chg = round(((price - prev) / prev) * 100, 2)
+            vol = hist["Volume"].iloc[-1]
+            avg_vol = hist["Volume"].mean()
+            vol_ratio = round(vol / avg_vol, 1) if avg_vol > 0 else 1.0
+            info = t.info or {}
+            results.append(
+                {
+                    "ticker": ticker,
+                    "name": info.get("shortName", ticker.replace(".NS", "")),
+                    "price": price,
+                    "change_pct": chg,
+                    "vol_ratio": vol_ratio,
+                    "pe": info.get("trailingPE"),
+                    "sector": info.get("sector", ""),
+                }
+            )
+        except Exception:
+            continue
+    return results
+
+
+@st.fragment()
+def _watchlist_fragment():
+    """Fragment — watchlist tracker with custom tickers."""
+    st.caption("Track stocks you're interested in but haven't bought yet")
+
+    # Initialize watchlist in session state
+    if "watchlist" not in st.session_state:
+        st.session_state["watchlist"] = []
+
+    # Add stock by name
+    wc1, wc2 = st.columns([3, 1])
+    with wc1:
+        stock_name = st.text_input(
+            "Add stock (e.g. Reliance, TCS, Infosys)",
+            placeholder="Reliance",
+            key="watchlist_input",
+        )
+    with wc2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("➕ Add", key="watchlist_add") and stock_name.strip():
+            if len(st.session_state["watchlist"]) >= 20:
+                st.warning("Watchlist limited to 20 stocks.")
+            else:
+                with st.spinner(f"Finding {stock_name.strip()}..."):
+                    result = auto_resolve_ticker(stock_name.strip(), "stock")
+                if result["ticker"] and not result["error"]:
+                    ticker = result["ticker"]
+                    if ticker not in st.session_state["watchlist"]:
+                        st.session_state["watchlist"].append(ticker)
+                        st.rerun()
+                    else:
+                        st.info(f"{result['name']} is already in your watchlist.")
+                else:
+                    st.error(
+                        f"Could not find '{stock_name.strip()}'. Try a different name."
+                    )
+
+    # Quick add popular stocks
+    popular = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ITC.NS"]
+    not_added = [t for t in popular if t not in st.session_state["watchlist"]]
+    if not_added:
+        st.caption("Quick add:")
+        qcols = st.columns(len(not_added))
+        for qc, ticker in zip(qcols, not_added):
+            if qc.button(ticker.replace(".NS", ""), key=f"qa_{ticker}"):
+                st.session_state["watchlist"].append(ticker)
+                st.rerun()
+
+    # Display watchlist
+    watchlist = st.session_state["watchlist"]
+    if watchlist:
+        with st.spinner("Fetching watchlist data..."):
+            wl_data = _fetch_watchlist_data(tuple(watchlist))
+
+        if wl_data:
+            wl_rows = []
+            for w in wl_data:
+                icon = "🟢" if w["change_pct"] >= 0 else "🔴"
+                vol_tag = "🔥" if w["vol_ratio"] >= 2 else ""
+                pe_str = f"{w['pe']:.1f}" if w["pe"] else "—"
+                wl_rows.append(
+                    {
+                        "": icon,
+                        "Name": w["name"],
+                        "Price": f"₹{w['price']:,.2f}",
+                        "Change": f"{w['change_pct']:+.2f}%",
+                        "Volume": f"{vol_tag}{w['vol_ratio']}x",
+                        "PE": pe_str,
+                        "Sector": w["sector"],
+                    }
+                )
+            st.dataframe(pd.DataFrame(wl_rows), hide_index=True, width="stretch")
+
+        # Remove buttons
+        st.caption("Remove from watchlist:")
+        rem_cols = st.columns(min(len(watchlist), 5))
+        for i, ticker in enumerate(watchlist):
+            col = rem_cols[i % len(rem_cols)]
+            if col.button(f"❌ {ticker.replace('.NS', '')}", key=f"rem_{ticker}"):
+                st.session_state["watchlist"].remove(ticker)
+                st.rerun()
+    else:
+        st.info("Your watchlist is empty. Add tickers above to start tracking.")
+
+
 def render(holdings):
     st.title("🔎 Market Opportunity Scanner")
 
-    scan_tab1, scan_tab2, scan_tab3, scan_tab4 = st.tabs(
+    scan_tab1, scan_tab2, scan_tab3, scan_tab4, scan_tab5 = st.tabs(
         [
             "🚀 Top Movers",
             "💡 What Should I Buy?",
             "🔄 Sell & Replace",
             "🏭 Sector Heatmap",
+            "👀 Watchlist",
         ]
     )
 
@@ -417,7 +537,10 @@ def render(holdings):
         _cheap_stocks_fragment(holdings)
 
     with scan_tab3:
-        _sell_replace_fragment()
+        _sell_replace_fragment(holdings)
 
     with scan_tab4:
         _sector_heatmap_fragment()
+
+    with scan_tab5:
+        _watchlist_fragment()

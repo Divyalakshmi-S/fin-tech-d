@@ -1,14 +1,18 @@
 -- =============================================================
 -- Supabase Schema for fin-tech-d
 -- Run this in the Supabase SQL Editor (Dashboard → SQL Editor)
+--
+-- Auth: handled by Streamlit (st.login), NOT Supabase Auth.
+-- user_id = user's email address (TEXT).
+-- App uses SUPABASE_SERVICE_KEY which bypasses RLS.
+-- RLS is enabled to block direct anon/public access.
 -- =============================================================
 
 -- 1. User-specific tables --
 
--- Portfolio holdings (one row per holding per user)
 CREATE TABLE IF NOT EXISTS portfolio (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL,
     name        TEXT NOT NULL,
     ticker      TEXT NOT NULL DEFAULT '',
     type        TEXT NOT NULL DEFAULT 'stock',
@@ -24,20 +28,18 @@ CREATE TABLE IF NOT EXISTS portfolio (
     created_at  TIMESTAMPTZ DEFAULT now()
 );
 
--- Budget (one row per user)
 CREATE TABLE IF NOT EXISTS budget (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_id     UUID NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL UNIQUE,
     income      NUMERIC NOT NULL DEFAULT 0,
     expenses    NUMERIC NOT NULL DEFAULT 0,
     investments NUMERIC NOT NULL DEFAULT 0,
     updated_at  TIMESTAMPTZ DEFAULT now()
 );
 
--- Goals (multiple per user)
 CREATE TABLE IF NOT EXISTS goals (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL,
     name        TEXT NOT NULL,
     target      NUMERIC NOT NULL DEFAULT 0,
     years       NUMERIC NOT NULL DEFAULT 5,
@@ -47,7 +49,7 @@ CREATE TABLE IF NOT EXISTS goals (
     updated_at  TIMESTAMPTZ DEFAULT now()
 );
 
--- 2. Global tables (shared across all users, written by bot) --
+-- 2. Global tables (shared, written by bot) --
 
 CREATE TABLE IF NOT EXISTS gold_predictions (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -100,7 +102,6 @@ CREATE TABLE IF NOT EXISTS scanner_predictions (
     UNIQUE(date, ticker)
 );
 
--- Stock-specific predictions (from holdings analysis)
 CREATE TABLE IF NOT EXISTS stock_predictions (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     date        TEXT NOT NULL,
@@ -118,58 +119,9 @@ CREATE TABLE IF NOT EXISTS stock_predictions (
     UNIQUE(date, ticker)
 );
 
--- 3. Row Level Security (RLS) --
-
-ALTER TABLE portfolio ENABLE ROW LEVEL SECURITY;
-ALTER TABLE budget ENABLE ROW LEVEL SECURITY;
-ALTER TABLE goals ENABLE ROW LEVEL SECURITY;
-
--- Users can only see/edit their own data
-CREATE POLICY "Users manage own portfolio" ON portfolio
-    FOR ALL USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Users manage own budget" ON budget
-    FOR ALL USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Users manage own goals" ON goals
-    FOR ALL USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
-
--- Global prediction tables: everyone can read, service role can write
-ALTER TABLE gold_predictions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE silver_predictions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE scanner_predictions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE stock_predictions ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Anyone can read gold_predictions" ON gold_predictions
-    FOR SELECT USING (true);
-CREATE POLICY "Anyone can read silver_predictions" ON silver_predictions
-    FOR SELECT USING (true);
-CREATE POLICY "Anyone can read scanner_predictions" ON scanner_predictions
-    FOR SELECT USING (true);
-CREATE POLICY "Anyone can read stock_predictions" ON stock_predictions
-    FOR SELECT USING (true);
-
--- Service role (bot) bypasses RLS automatically, so no insert policy needed for anon
-
--- 4. Indexes --
-CREATE INDEX IF NOT EXISTS idx_portfolio_user ON portfolio(user_id);
-CREATE INDEX IF NOT EXISTS idx_goals_user ON goals(user_id);
-CREATE INDEX IF NOT EXISTS idx_gold_pred_date ON gold_predictions(date);
-CREATE INDEX IF NOT EXISTS idx_silver_pred_date ON silver_predictions(date);
-CREATE INDEX IF NOT EXISTS idx_scanner_pred_date ON scanner_predictions(date);
-CREATE INDEX IF NOT EXISTS idx_stock_pred_date ON stock_predictions(date);
-
-
--- =============================================================
--- 5. Portfolio History (daily snapshots for value-over-time charts)
--- =============================================================
-
 CREATE TABLE IF NOT EXISTS portfolio_history (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_id     UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id     TEXT,
     date        TEXT NOT NULL,
     total_invested NUMERIC NOT NULL DEFAULT 0,
     total_current  NUMERIC NOT NULL DEFAULT 0,
@@ -183,27 +135,12 @@ CREATE TABLE IF NOT EXISTS portfolio_history (
     UNIQUE(user_id, date)
 );
 
--- For local/guest mode (user_id NULL)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_history_guest
     ON portfolio_history(date) WHERE user_id IS NULL;
 
-ALTER TABLE portfolio_history ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Users manage own portfolio_history" ON portfolio_history
-    FOR ALL USING (auth.uid() = user_id OR user_id IS NULL)
-    WITH CHECK (auth.uid() = user_id OR user_id IS NULL);
-
-CREATE INDEX IF NOT EXISTS idx_portfolio_history_user_date
-    ON portfolio_history(user_id, date);
-
-
--- =============================================================
--- 6. Dividend Tracking
--- =============================================================
-
 CREATE TABLE IF NOT EXISTS dividends (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_id     UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id     TEXT,
     ticker      TEXT NOT NULL,
     name        TEXT NOT NULL DEFAULT '',
     amount      NUMERIC NOT NULL DEFAULT 0,
@@ -211,22 +148,9 @@ CREATE TABLE IF NOT EXISTS dividends (
     created_at  TIMESTAMPTZ DEFAULT now()
 );
 
-ALTER TABLE dividends ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Users manage own dividends" ON dividends
-    FOR ALL USING (auth.uid() = user_id OR user_id IS NULL)
-    WITH CHECK (auth.uid() = user_id OR user_id IS NULL);
-
-CREATE INDEX IF NOT EXISTS idx_dividends_user ON dividends(user_id);
-
-
--- =============================================================
--- 7. Net Worth Tracking (F1)
--- =============================================================
-
 CREATE TABLE IF NOT EXISTS net_worth (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_id         UUID NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id         TEXT NOT NULL UNIQUE,
     bank_balance    NUMERIC NOT NULL DEFAULT 0,
     fd_amount       NUMERIC NOT NULL DEFAULT 0,
     ppf_balance     NUMERIC NOT NULL DEFAULT 0,
@@ -243,32 +167,14 @@ CREATE TABLE IF NOT EXISTS net_worth (
     updated_at      TIMESTAMPTZ DEFAULT now()
 );
 
-ALTER TABLE net_worth ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users manage own net_worth" ON net_worth
-    FOR ALL USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
-
-
--- =============================================================
--- 8. Family Account Management
--- =============================================================
-
 CREATE TABLE IF NOT EXISTS family_members (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    owner_id    UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    owner_id    TEXT NOT NULL,
     name        TEXT NOT NULL,
-    profile_type TEXT NOT NULL DEFAULT 'member',  -- spouse, child, parent, sibling, other
+    profile_type TEXT NOT NULL DEFAULT 'member',
     created_at  TIMESTAMPTZ DEFAULT now()
 );
 
-ALTER TABLE family_members ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users manage own family_members" ON family_members
-    FOR ALL USING (auth.uid() = owner_id)
-    WITH CHECK (auth.uid() = owner_id);
-
-CREATE INDEX IF NOT EXISTS idx_family_members_owner ON family_members(owner_id);
-
--- Family member portfolios (mirrors portfolio table structure)
 CREATE TABLE IF NOT EXISTS family_portfolio (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     member_id   BIGINT NOT NULL REFERENCES family_members(id) ON DELETE CASCADE,
@@ -287,26 +193,9 @@ CREATE TABLE IF NOT EXISTS family_portfolio (
     created_at  TIMESTAMPTZ DEFAULT now()
 );
 
-ALTER TABLE family_portfolio ENABLE ROW LEVEL SECURITY;
--- Access via family_members ownership chain
-CREATE POLICY "Users manage own family_portfolio" ON family_portfolio
-    FOR ALL USING (
-        member_id IN (SELECT id FROM family_members WHERE owner_id = auth.uid())
-    )
-    WITH CHECK (
-        member_id IN (SELECT id FROM family_members WHERE owner_id = auth.uid())
-    );
-
-CREATE INDEX IF NOT EXISTS idx_family_portfolio_member ON family_portfolio(member_id);
-
-
--- =============================================================
--- 9. Target Allocation (for rebalancing engine)
--- =============================================================
-
 CREATE TABLE IF NOT EXISTS target_allocation (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL,
     asset_class TEXT NOT NULL,
     target_pct  NUMERIC NOT NULL DEFAULT 0,
     tolerance_pct NUMERIC NOT NULL DEFAULT 5.0,
@@ -314,21 +203,11 @@ CREATE TABLE IF NOT EXISTS target_allocation (
     UNIQUE(user_id, asset_class)
 );
 
-ALTER TABLE target_allocation ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users manage own target_allocation" ON target_allocation
-    FOR ALL USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
-
-
--- =============================================================
--- 10. Retirement Instruments (extends fixed_instruments)
--- =============================================================
-
 CREATE TABLE IF NOT EXISTS fixed_instruments (
     id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL,
     name        TEXT NOT NULL DEFAULT '',
-    type        TEXT NOT NULL DEFAULT '',           -- EPF, PPF, NPS, SSY, SCSS, FD, RD
+    type        TEXT NOT NULL DEFAULT '',
     current_balance NUMERIC NOT NULL DEFAULT 0,
     monthly_contribution NUMERIC NOT NULL DEFAULT 0,
     employer_contribution NUMERIC NOT NULL DEFAULT 0,
@@ -338,21 +217,9 @@ CREATE TABLE IF NOT EXISTS fixed_instruments (
     created_at  TIMESTAMPTZ DEFAULT now()
 );
 
-ALTER TABLE fixed_instruments ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users manage own fixed_instruments" ON fixed_instruments
-    FOR ALL USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
-
-CREATE INDEX IF NOT EXISTS idx_fixed_instruments_user ON fixed_instruments(user_id);
-
-
--- =============================================================
--- 8. Tax Planning (F6)
--- =============================================================
-
 CREATE TABLE IF NOT EXISTS tax_planning (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_id         UUID NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id         TEXT NOT NULL UNIQUE,
     gross_income    NUMERIC NOT NULL DEFAULT 0,
     hra_received    NUMERIC NOT NULL DEFAULT 0,
     rent_paid       NUMERIC NOT NULL DEFAULT 0,
@@ -372,32 +239,41 @@ CREATE TABLE IF NOT EXISTS tax_planning (
     updated_at      TIMESTAMPTZ DEFAULT now()
 );
 
-ALTER TABLE tax_planning ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users manage own tax_planning" ON tax_planning
-    FOR ALL USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
+-- 3. RLS — block direct anon access; app uses service key (bypasses RLS) --
 
-
--- =============================================================
--- 9. Fixed Income Instruments — NPS/PPF/FD Tracker (F8)
--- =============================================================
-
-CREATE TABLE IF NOT EXISTS fixed_instruments (
-    id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    user_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-    type            TEXT NOT NULL DEFAULT 'FD',
-    name            TEXT NOT NULL DEFAULT '',
-    current_value   NUMERIC NOT NULL DEFAULT 0,
-    interest_rate   NUMERIC NOT NULL DEFAULT 0,
-    start_date      TEXT NOT NULL DEFAULT '',
-    maturity_date   TEXT NOT NULL DEFAULT '',
-    monthly_contribution NUMERIC NOT NULL DEFAULT 0,
-    created_at      TIMESTAMPTZ DEFAULT now()
-);
-
+ALTER TABLE portfolio ENABLE ROW LEVEL SECURITY;
+ALTER TABLE budget ENABLE ROW LEVEL SECURITY;
+ALTER TABLE goals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE portfolio_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dividends ENABLE ROW LEVEL SECURITY;
+ALTER TABLE net_worth ENABLE ROW LEVEL SECURITY;
+ALTER TABLE family_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE family_portfolio ENABLE ROW LEVEL SECURITY;
+ALTER TABLE target_allocation ENABLE ROW LEVEL SECURITY;
 ALTER TABLE fixed_instruments ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users manage own fixed_instruments" ON fixed_instruments
-    FOR ALL USING (auth.uid() = user_id)
-    WITH CHECK (auth.uid() = user_id);
+ALTER TABLE tax_planning ENABLE ROW LEVEL SECURITY;
 
+-- Prediction tables: anyone can read
+ALTER TABLE gold_predictions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE silver_predictions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE scanner_predictions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_predictions ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Anyone can read gold_predictions" ON gold_predictions FOR SELECT USING (true);
+CREATE POLICY "Anyone can read silver_predictions" ON silver_predictions FOR SELECT USING (true);
+CREATE POLICY "Anyone can read scanner_predictions" ON scanner_predictions FOR SELECT USING (true);
+CREATE POLICY "Anyone can read stock_predictions" ON stock_predictions FOR SELECT USING (true);
+
+-- 4. Indexes --
+
+CREATE INDEX IF NOT EXISTS idx_portfolio_user ON portfolio(user_id);
+CREATE INDEX IF NOT EXISTS idx_goals_user ON goals(user_id);
+CREATE INDEX IF NOT EXISTS idx_gold_pred_date ON gold_predictions(date);
+CREATE INDEX IF NOT EXISTS idx_silver_pred_date ON silver_predictions(date);
+CREATE INDEX IF NOT EXISTS idx_scanner_pred_date ON scanner_predictions(date);
+CREATE INDEX IF NOT EXISTS idx_stock_pred_date ON stock_predictions(date);
+CREATE INDEX IF NOT EXISTS idx_portfolio_history_user_date ON portfolio_history(user_id, date);
+CREATE INDEX IF NOT EXISTS idx_dividends_user ON dividends(user_id);
+CREATE INDEX IF NOT EXISTS idx_family_members_owner ON family_members(owner_id);
+CREATE INDEX IF NOT EXISTS idx_family_portfolio_member ON family_portfolio(member_id);
 CREATE INDEX IF NOT EXISTS idx_fixed_instruments_user ON fixed_instruments(user_id);
