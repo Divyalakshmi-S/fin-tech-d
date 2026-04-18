@@ -171,30 +171,37 @@ if st.sidebar.button("🔄 Refresh Data", use_container_width=True):
 
 st.sidebar.caption(f"⏱️ Data cached for 5 min")
 
+# Admin-only pages
+_ADMIN_EMAIL = "divyalakshmi.sathishkumar@comcast.com"
+_is_admin = user_id == _ADMIN_EMAIL
+
+_pages = [
+    "🏠 Overview",
+    "───── Markets ─────",
+    "🪙 Gold & Silver",
+    "🔎 Market Scanner",
+    "📰 News",
+    "───── My Money ─────",
+    "📁 My Portfolio",
+    "🔬 Holdings Analysis",
+    "🎯 Goals",
+    "💰 Budget",
+    "───── Planning ─────",
+    "📋 Tax Planning",
+    "🧮 Calculators",
+    "👨‍👩‍👧‍👦 Family",
+    "🛡️ Financial Health",
+    "🏥 Health Checkup",
+    "───── Tools ─────",
+    "📈 Prediction Scorecard",
+    "📚 Learn",
+]
+if _is_admin:
+    _pages.append("⚙️ Manage Portfolio")
+
 page = st.sidebar.radio(
     "Navigate",
-    [
-        "🏠 Overview",
-        "───── Markets ─────",
-        "🪙 Gold & Silver",
-        "🔎 Market Scanner",
-        "📰 News",
-        "───── My Money ─────",
-        "📁 My Portfolio",
-        "🔬 Holdings Analysis",
-        "🎯 Goals",
-        "💰 Budget",
-        "───── Planning ─────",
-        "📋 Tax Planning",
-        "🧮 Calculators",
-        "👨‍👩‍👧‍👦 Family",
-        "🛡️ Financial Health",
-        "🏥 Health Checkup",
-        "───── Tools ─────",
-        "📈 Prediction Scorecard",
-        "📚 Learn",
-        "⚙️ Manage Portfolio",
-    ],
+    _pages,
     label_visibility="collapsed",
 )
 

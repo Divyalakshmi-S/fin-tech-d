@@ -2,18 +2,24 @@
 -- Supabase Schema for fin-tech-d
 -- Run this in the Supabase SQL Editor (Dashboard → SQL Editor)
 --
--- Auth: handled by Streamlit (st.login), NOT Supabase Auth.
--- user_id = user's email address (TEXT).
--- App uses SUPABASE_SERVICE_KEY (bot) or SUPABASE_KEY (dashboard).
--- RLS is enabled — anon key has read-only on predictions,
--- service key bypasses RLS for writes.
+-- Auth: Google OAuth via Streamlit (st.login), NOT Supabase Auth.
+-- user_id = user's email address (TEXT) from st.user.email.
+-- App uses SUPABASE_KEY (anon/public) for the dashboard and
+-- SUPABASE_SERVICE_KEY for the bot (GitHub Actions, bypasses RLS).
+--
+-- RLS STRATEGY:
+-- • All tables have RLS enabled.
+-- • Permissive policies (USING true) allow the anon key full
+--   CRUD — row-level isolation is enforced in application code
+--   via user_id filters on every query.
+-- • Prediction tables: full read/write for all users (shared data).
+-- • User-data tables: full CRUD — app filters by user_id.
+-- • Service key (bot) bypasses RLS entirely.
 --
 -- SECURITY NOTES:
 -- • Never expose SUPABASE_SERVICE_KEY in client-side code.
--- • Dashboard uses the anon key; bot/GitHub Actions uses service key.
--- • All user tables have RLS enabled with no public policies
---   (only service-key writes succeed).
--- • Prediction tables allow public SELECT only.
+-- • Dashboard uses anon key; bot/GitHub Actions uses service key.
+-- • Manage Portfolio page is admin-only (email whitelist in dashboard.py).
 -- =============================================================
 
 -- 1. User-specific tables --
@@ -290,7 +296,12 @@ CREATE TABLE IF NOT EXISTS tax_planning (
     updated_at      TIMESTAMPTZ DEFAULT now()
 );
 
--- 3. RLS — block direct anon access; app uses service key (bypasses RLS) --
+-- 3. RLS — permissive policies; app-level user_id filtering --
+-- Run GRANT USAGE first (one-time, required for anon key):
+-- GRANT USAGE ON SCHEMA public TO anon, authenticated;
+-- GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO anon, authenticated;
+-- ALTER DEFAULT PRIVILEGES IN SCHEMA public
+--   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO anon, authenticated;
 
 ALTER TABLE portfolio ENABLE ROW LEVEL SECURITY;
 ALTER TABLE budget ENABLE ROW LEVEL SECURITY;
@@ -313,16 +324,33 @@ ALTER TABLE gold_buyday_predictions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE gold_buyday_weights ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Anyone can read gold_predictions" ON gold_predictions FOR SELECT USING (true);
-CREATE POLICY "Anyone can read silver_predictions" ON silver_predictions FOR SELECT USING (true);
-CREATE POLICY "Anyone can read scanner_predictions" ON scanner_predictions FOR SELECT USING (true);
-CREATE POLICY "Anyone can read stock_predictions" ON stock_predictions FOR SELECT USING (true);
-CREATE POLICY "Anyone can read gold_buyday_predictions" ON gold_buyday_predictions FOR SELECT USING (true);
-CREATE POLICY "Anyone can read gold_buyday_weights" ON gold_buyday_weights FOR SELECT USING (true);
+CREATE POLICY "Anyone can insert gold_predictions" ON gold_predictions FOR INSERT WITH CHECK (true);
+CREATE POLICY "Anyone can update gold_predictions" ON gold_predictions FOR UPDATE USING (true);
 
--- User-data tables: anon can manage rows matching their user_id
--- (user_id is passed from Streamlit Cloud's st.user.email)
+CREATE POLICY "Anyone can read silver_predictions" ON silver_predictions FOR SELECT USING (true);
+CREATE POLICY "Anyone can insert silver_predictions" ON silver_predictions FOR INSERT WITH CHECK (true);
+CREATE POLICY "Anyone can update silver_predictions" ON silver_predictions FOR UPDATE USING (true);
+
+CREATE POLICY "Anyone can read scanner_predictions" ON scanner_predictions FOR SELECT USING (true);
+CREATE POLICY "Anyone can insert scanner_predictions" ON scanner_predictions FOR INSERT WITH CHECK (true);
+CREATE POLICY "Anyone can update scanner_predictions" ON scanner_predictions FOR UPDATE USING (true);
+
+CREATE POLICY "Anyone can read stock_predictions" ON stock_predictions FOR SELECT USING (true);
+CREATE POLICY "Anyone can insert stock_predictions" ON stock_predictions FOR INSERT WITH CHECK (true);
+CREATE POLICY "Anyone can update stock_predictions" ON stock_predictions FOR UPDATE USING (true);
+
+CREATE POLICY "Anyone can read gold_buyday_predictions" ON gold_buyday_predictions FOR SELECT USING (true);
+CREATE POLICY "Anyone can insert gold_buyday_predictions" ON gold_buyday_predictions FOR INSERT WITH CHECK (true);
+CREATE POLICY "Anyone can update gold_buyday_predictions" ON gold_buyday_predictions FOR UPDATE USING (true);
+
+CREATE POLICY "Anyone can read gold_buyday_weights" ON gold_buyday_weights FOR SELECT USING (true);
+CREATE POLICY "Anyone can insert gold_buyday_weights" ON gold_buyday_weights FOR INSERT WITH CHECK (true);
+CREATE POLICY "Anyone can update gold_buyday_weights" ON gold_buyday_weights FOR UPDATE USING (true);
+
+-- User-data tables: permissive CRUD — app filters by user_id in every query
 CREATE POLICY "Users can read own goals" ON goals FOR SELECT USING (true);
 CREATE POLICY "Users can insert own goals" ON goals FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users can update own goals" ON goals FOR UPDATE USING (true);
 CREATE POLICY "Users can delete own goals" ON goals FOR DELETE USING (true);
 
 CREATE POLICY "Users can read own portfolio" ON portfolio FOR SELECT USING (true);

@@ -13,12 +13,14 @@ _PERIOD_OPTIONS = {
 }
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def _fetch_index_data(ticker_symbol, period="1mo"):
     """Cached index data fetch — avoids re-downloading on every rerun."""
     try:
         data = yf.Ticker(ticker_symbol).history(period=period)
-        return data
+        if data is not None and not data.empty:
+            return data
+        return None
     except Exception:
         return None
 

@@ -1,12 +1,12 @@
 # 📊 Personal Finance Dashboard & Bot
 
-Track your Indian stocks, gold, silver, and mutual funds — with a Streamlit dashboard, daily WhatsApp alerts, and weekly email recaps. **100% free tools.**
+Multi-user personal finance dashboard for Indian stocks, gold, silver, and mutual funds — with Google Sign-In, cloud data storage, daily Telegram alerts, and weekly email recaps. **100% free tools.**
 
 ---
 
 ## What It Does
 
-### Daily WhatsApp (via Twilio — free $15 credit)
+### Daily Telegram Bot
 
 A short morning message with only what matters:
 
@@ -28,9 +28,9 @@ A compact recap with:
 
 ### Streamlit Dashboard (run locally or deploy free)
 
-Full deep-dive analysis:
+Multi-user dashboard with Google Sign-In and Supabase cloud storage:
 
-- **Overview**: Nifty, Sensex, gold/silver charts
+- **Overview**: Nifty, Sensex, gold/silver charts (15-min cache)
 - **Gold & Silver**: Price trends, buy predictions (7-factor engine), self-learning from past predictions
 - **Portfolio**: All holdings with value, type breakdown, diversification score
 - **Holdings Analysis**: Per-stock RSI, MA chart, fundamentals, PE, news with impact analysis, buy/sell recommendation (8-factor engine), portfolio rebalancing with drift detection
@@ -42,6 +42,7 @@ Full deep-dive analysis:
 - **Financial Health**: Health scoring + guided checkup wizard
 - **Calculators**: Step-up SIP, Loan/EMI impact analysis
 - **Tax Planning**: Old vs New regime comparison, LTCG/STCG breakdown
+- **Manage Portfolio** (admin-only): Add/edit/delete holdings
 
 ---
 
@@ -97,32 +98,61 @@ The app automatically calculates:
 - **Days to LTCG** — countdown to long-term tax benefit
 - **XIRR** — annualized returns using actual buy dates
 
-Data is stored in `data/portfolio.json` (auto-created).
+Data is stored in Supabase (cloud) or `data/portfolio.json` (local).
 
 ---
 
 ## Database Setup (Supabase — free tier)
 
-The app uses **Supabase** for multi-user auth and cloud data storage. Without it, data is stored locally in JSON files (single-user mode).
+The app uses **Supabase** for multi-user cloud data storage. Without it, data is stored locally in JSON files (single-user mode).
 
 1. Create a project at [supabase.com](https://supabase.com) (free tier)
 2. Go to **SQL Editor** → paste and run the contents of `supabase_schema.sql`
-3. Go to **Settings → API** → copy your **Project URL** and **anon (public) key**
-4. For the bot (GitHub Actions), also copy the **service_role key** from the same page
-5. Add to your `.env`:
+3. Run the schema grants (one-time, required for anon key):
+   ```sql
+   GRANT USAGE ON SCHEMA public TO anon, authenticated;
+   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO anon, authenticated;
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public
+     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO anon, authenticated;
+   ```
+4. Go to **Settings → API** → copy your **Project URL** and **anon (public) key**
+5. For the bot (GitHub Actions), also copy the **service_role key** from the same page
+6. Add to your `.env` (local dev + bot):
    ```
    SUPABASE_URL=https://your-project.supabase.co
    SUPABASE_KEY=your_anon_key
    SUPABASE_SERVICE_KEY=your_service_role_key
    ```
-6. For Streamlit Cloud, add these to `.streamlit/secrets.toml`:
-   ```toml
-   [supabase]
-   SUPABASE_URL = "https://your-project.supabase.co"
-   SUPABASE_KEY = "your_anon_key"
-   ```
+
+### Streamlit Cloud Secrets
+
+In **Settings → Secrets**, paste this TOML (all sections required):
+
+```toml
+[supabase]
+SUPABASE_URL = "https://your-project.supabase.co"
+SUPABASE_KEY = "your_anon_key"
+
+[auth]
+redirect_uri = "https://your-app.streamlit.app/oauth2callback"
+cookie_secret = "a-random-secret-string"
+
+[auth.google]
+client_id = "your-google-client-id"
+client_secret = "your-google-client-secret"
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+```
 
 > **Without Supabase**: The app still works in single-user mode using local JSON files in `data/`. Auth is skipped, and you get full functionality as a personal tool.
+
+### Google OAuth Setup
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com) → **APIs & Services → Credentials**
+2. Create an **OAuth 2.0 Client ID** (Web application)
+3. Add authorized redirect URI: `https://your-app.streamlit.app/oauth2callback`
+4. Copy Client ID and Client Secret to your Streamlit Cloud secrets
+
+> **Without Google OAuth**: Users can still use the app in guest mode (data stored with no user_id).
 
 ---
 
@@ -133,14 +163,15 @@ The app uses **Supabase** for multi-user auth and cloud data storage. Without it
 1. Push your code to GitHub
 2. Add secrets: **Settings → Secrets → Actions**
 
-   | Secret           | Value                         |
-   | ---------------- | ----------------------------- |
-   | `TWILIO_SID`     | Twilio Account SID            |
-   | `TWILIO_AUTH`    | Twilio Auth Token             |
-   | `TO_NUMBER`      | `whatsapp:+91XXXXXXXXXX`      |
-   | `EMAIL_FROM`     | Gmail address                 |
-   | `EMAIL_PASSWORD` | Gmail App Password (16 chars) |
-   | `EMAIL_TO`       | Recipient email               |
+   | Secret                 | Value                         |
+   | ---------------------- | ----------------------------- |
+   | `TELEGRAM_BOT_TOKEN`   | Telegram Bot API token        |
+   | `TELEGRAM_CHAT_ID`     | Your Telegram chat ID         |
+   | `SUPABASE_URL`         | Supabase project URL          |
+   | `SUPABASE_SERVICE_KEY` | Supabase service_role key     |
+   | `EMAIL_FROM`           | Gmail address                 |
+   | `EMAIL_PASSWORD`       | Gmail App Password (16 chars) |
+   | `EMAIL_TO`             | Recipient email               |
 
 3. Go to **Actions** tab → Enable workflows
 4. Schedule: Daily bot at 7:00 AM IST, weekly email on Sundays 9:30 AM IST
@@ -153,16 +184,12 @@ The app uses **Supabase** for multi-user auth and cloud data storage. Without it
 4. Select your repo, branch `main`, file `dashboard.py`
 5. Click **Deploy** — your dashboard is live with a public URL
 
-### Setting Up Twilio WhatsApp (free $15 credit — lasts ~8 years)
+### Setting Up Telegram Bot (free)
 
-1. Create account at [twilio.com](https://www.twilio.com) — get **$15 free credit** (no card needed)
-2. Go to **Messaging → Try it out → Send a WhatsApp message**
-3. Send the join code from your WhatsApp to the Twilio sandbox number
-4. Copy **Account SID** and **Auth Token** from the Twilio console
-5. Add `TWILIO_SID`, `TWILIO_AUTH`, `TO_NUMBER` to `.env` or GitHub Secrets
-
-> **Cost**: ~$0.005/msg → $15 credit = ~3,000 messages = **~8 years** of daily alerts.
-> **Sandbox note**: If you don't send for 72h, re-send the join code. With daily GitHub Actions, this won't happen.
+1. Message [@BotFather](https://t.me/BotFather) on Telegram → `/newbot`
+2. Copy the **Bot Token** it gives you
+3. Message your bot, then get your chat ID from `https://api.telegram.org/bot<TOKEN>/getUpdates`
+4. Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to `.env` or GitHub Secrets
 
 ### Setting Up Gmail (weekly email — free)
 
@@ -200,7 +227,7 @@ The app uses **Supabase** for multi-user auth and cloud data storage. Without it
 ├── dashboard.py               # Streamlit dashboard (16 pages)
 ├── bot.py                     # Daily Telegram bot (market alerts)
 ├── weekly_email.py            # Weekly HTML email recap
-├── auth.py                    # Supabase auth with guest fallback
+├── auth.py                    # Google OAuth (st.login) with guest fallback
 ├── db.py                      # Database layer (Supabase + per-user JSON fallback)
 ├── ui_helpers.py              # UI components, PDF export, disclaimers
 ├── supabase_schema.sql        # Full database schema with RLS policies
@@ -223,7 +250,7 @@ The app uses **Supabase** for multi-user auth and cloud data storage. Without it
 | USD/INR exchange      | Yahoo Finance (USDINR=X)         |
 | Mutual Fund NAVs      | AMFI India API                   |
 | News headlines        | Google News RSS                  |
-| WhatsApp delivery     | Twilio (free sandbox)            |
+| Telegram alerts       | Telegram Bot API (free)          |
 | Email delivery        | Gmail SMTP (free)                |
 | Automation            | GitHub Actions (free tier)       |
 | Dashboard hosting     | Streamlit Community Cloud (free) |
@@ -234,5 +261,5 @@ The app uses **Supabase** for multi-user auth and cloud data storage. Without it
 
 | Job            | Cron (UTC)   | IST Time | Frequency    |
 | -------------- | ------------ | -------- | ------------ |
-| Daily WhatsApp | `30 1 * * *` | 7:00 AM  | Every day    |
+| Daily Telegram | `30 1 * * *` | 7:00 AM  | Every day    |
 | Weekly Email   | `0 4 * * 0`  | 9:30 AM  | Every Sunday |

@@ -193,12 +193,22 @@ def save_portfolio(rows, user_id=None):
             if rows:
                 for r in rows:
                     r["user_id"] = user_id
+                    # Ensure required fields have defaults
+                    r.setdefault("transactions", [])
+                    r.setdefault("sip_pause_periods", [])
+                    r.setdefault("ticker", "")
+                    r.setdefault("type", "stock")
+                    r.setdefault("investment_mode", "lumpsum")
+                    r.setdefault("buy_price", 0)
+                    r.setdefault("quantity", 0)
+                    r.setdefault("buy_date", "")
+                    r.setdefault("sip_monthly", 0)
+                    r.setdefault("sip_date", 0)
+                    r.setdefault("amfi_code", "")
                     # Ensure JSONB fields are dicts/lists, not strings
-                    if "transactions" in r and isinstance(r["transactions"], str):
+                    if isinstance(r["transactions"], str):
                         r["transactions"] = json.loads(r["transactions"])
-                    if "sip_pause_periods" in r and isinstance(
-                        r["sip_pause_periods"], str
-                    ):
+                    if isinstance(r["sip_pause_periods"], str):
                         r["sip_pause_periods"] = json.loads(r["sip_pause_periods"])
                     # Remove fields not in DB schema
                     r.pop("id", None)
@@ -358,14 +368,19 @@ def delete_goal(goal_id, user_id=None):
 
 def load_predictions(table_name):
     """Load predictions from DB or JSON. table_name is one of:
-    gold_predictions, silver_predictions, scanner_predictions
+    gold_predictions, silver_predictions, scanner_predictions,
+    gold_buyday_predictions, gold_buyday_weights
     """
+    # Tables without a 'date' column — skip ordering
+    _no_date_tables = {"gold_buyday_weights"}
+
     client = _get_client()
     if client:
         try:
-            resp = (
-                client.table(table_name).select("*").order("date", desc=True).execute()
-            )
+            query = client.table(table_name).select("*")
+            if table_name not in _no_date_tables:
+                query = query.order("date", desc=True)
+            resp = query.execute()
             rows = resp.data or []
             for r in rows:
                 if isinstance(r.get("factor_scores"), str):
@@ -749,11 +764,22 @@ def save_family_portfolio(rows, member_id, user_id=None):
             if rows:
                 for r in rows:
                     r["member_id"] = member_id
-                    if "transactions" in r and isinstance(r["transactions"], str):
+                    # Ensure required fields have defaults
+                    r.setdefault("transactions", [])
+                    r.setdefault("sip_pause_periods", [])
+                    r.setdefault("ticker", "")
+                    r.setdefault("type", "stock")
+                    r.setdefault("investment_mode", "lumpsum")
+                    r.setdefault("buy_price", 0)
+                    r.setdefault("quantity", 0)
+                    r.setdefault("buy_date", "")
+                    r.setdefault("sip_monthly", 0)
+                    r.setdefault("sip_date", 0)
+                    r.setdefault("amfi_code", "")
+                    # Ensure JSONB fields are dicts/lists, not strings
+                    if isinstance(r["transactions"], str):
                         r["transactions"] = json.loads(r["transactions"])
-                    if "sip_pause_periods" in r and isinstance(
-                        r["sip_pause_periods"], str
-                    ):
+                    if isinstance(r["sip_pause_periods"], str):
                         r["sip_pause_periods"] = json.loads(r["sip_pause_periods"])
                     r.pop("id", None)
                     r.pop("created_at", None)
